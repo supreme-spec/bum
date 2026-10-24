@@ -116,7 +116,22 @@ void TIM6_DAC_IRQHandler(void) {
 
     failsafe(&rx, &fs_active);
 
+    /* Launch control */
+    bool launch_active = (rx.aux & 0x02) != 0;
+    launch_control(sp.sp, rx.thr, launch_active);
+
+    /* Anti-gravity */
+    float ag_scale = anti_gravity_scale(rx.thr);
+    for (int a = 0; a < 3; a++) {
+        pid.ki[a] *= ag_scale;
+    }
+
     asymmetric_mixer(pid.out, (uint16_t)rx.thr, motors, blade_loss.efficiency);
+
+    /* Turtle mode when disarmed */
+    if (!armed && (rx.aux & 0x04)) {
+        turtle_mode_mix(motors, true);
+    }
 
     if (armed && !fs_active && imu.healthy) {
         dshot_send(motors);
