@@ -193,7 +193,7 @@ void TIM7_IRQHandler(void) {
     // Обновляем фильтры RPM каждые 100ms
     if (current_ms - last_rpm_update_ms >= 100U) {
         last_rpm_update_ms = current_ms;
-        filter_bank_update_rpm(rpm.fused, rpm.conf, current_ms);
+        filter_bank_update_rpm(rpm.hz[0], rpm.conf, current_ms);
     }
 
     /* 3. Health monitoring - проверка IMU каждую секунду */
@@ -224,23 +224,10 @@ void TIM7_IRQHandler(void) {
         led_timer = current_ms;
         
         if (!imu.healthy) {
-            // Быстрое мигание при ошибке IMU
             gpio_set(GPIOC, GPIO_PIN_14);
-            delay_ms(50);
-            gpio_clr(GPIOC, GPIO_PIN_14);
-            delay_ms(50);
-            gpio_set(GPIOC, GPIO_PIN_14);
-            delay_ms(50);
-            gpio_clr(GPIOC, GPIO_PIN_14);
         } else if (armed) {
-            // Медленное мигание при armed
             gpio_set(GPIOC, GPIO_PIN_14);
-            delay_ms(100);
-            gpio_clr(GPIOC, GPIO_PIN_14);
         } else {
-            // Одиночное мигание при standby
-            gpio_set(GPIOC, GPIO_PIN_14);
-            delay_ms(10);
             gpio_clr(GPIOC, GPIO_PIN_14);
         }
     }
@@ -275,7 +262,7 @@ int main(void) {
 
     // Инициализация алгоритмов
     pid_init(pid.kp, pid.ki, pid.kd, pid.kf, pid.out, pid.i, pid.gp, pid.dl);
-    filter_bank_init(FRAME_HZ, 3200.0f, 8.0f);  // 8 Hz/sec slew rate
+    filter_bank_init(FRAME_HZ, 3200.0f, 200.0f);  // 200 Hz/sec slew rate
     propguard_init(9000.0f, 300.0f, 100);       // Пороги из твоих логов
     rpm_init(&rpm.model, &rpm.meas, &rpm.fused, &rpm.conf, rpm.hz);
     iterm_init(iterm.i, 400.0f);
@@ -292,12 +279,12 @@ int main(void) {
     // Настройка таймеров
     TIM6->PSC = (APB1_HZ / 3200) - 1;  // 3.2 kHz
     TIM6->CARR = 0;
-    TIM6->CTRL1 = (1<<3)|(1<<0);  // One pulse mode
-    TIM6->DINTEN = 1;             // Enable interrupt
+    TIM6->CTRL1 = (1<<2) | (1<<0);  // ARPE | CEN
+    TIM6->DINTEN = 1;
     
     TIM7->PSC = (APB1_HZ / 800) - 1;   // 800 Hz  
     TIM7->CARR = 0;
-    TIM7->CTRL1 = (1<<3)|(1<<0);
+    TIM7->CTRL1 = (1<<2) | (1<<0);  // ARPE | CEN
     TIM7->DINTEN = 1;
 
     // Индикация запуска

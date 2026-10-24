@@ -2,7 +2,7 @@
 
 static uint8_t crsf_buf[64];
 static uint8_t crsf_pos = 0;
-static crsf_t crsf_data = {0};
+static uint32_t last_frame_ms = 0;
 
 static uint8_t crsf_crc8(const uint8_t* data, uint8_t len) {
     uint8_t crc = 0;
@@ -42,11 +42,13 @@ void crsf_poll(crsf_t* out) {
                     crsf_data.y = (int16_t)(((raw >> 33) & 0x7FF) - 992);
                     crsf_data.aux = (raw >> 44) & 0xFFFF;
                     crsf_data.lq = 0xFF;
+                    last_frame_ms = hal_ms();
                     crsf_data.valid = true;
                 }
                 crsf_pos = 0;
             }
         }
     }
+    if (hal_ms() - last_frame_ms > 250) crsf_data.lq = 0;
     *out = crsf_data;
 }
