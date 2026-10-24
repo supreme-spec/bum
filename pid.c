@@ -34,34 +34,3 @@ void pid_update(float kp[3], float ki[3], float kd[3], float kf[3],
     }
 }
 
-void modes_apply(crsf_t* rx, float att[2], float sp[3]) {
-    sp[0] = (float)rx->r * 0.4f;
-    sp[1] = (float)rx->p * 0.4f;
-    sp[2] = (float)rx->y * 0.4f;
-    if (rx->aux & 0x01) {
-        sp[0] += 60.0f * (0.0f - att[0]);
-        sp[1] += 60.0f * (0.0f - att[1]);
-    }
-}
-
-void mixer(float out[3], uint16_t thr, uint16_t m[4]) {
-    int16_t t = thr, r = out[0]*0.5f, pi = out[1]*0.5f, y = out[2]*0.5f;
-    m[0] = t + r + pi + y;
-    m[1] = t - r + pi - y;
-    m[2] = t - r - pi + y;
-    m[3] = t + r - pi - y;
-    for (int i = 0; i < 4; i++) {
-        if (m[i] < 1000) m[i] = 1000;
-        if (m[i] > 2000) m[i] = 2000;
-    }
-}
-
-static uint32_t fs_t0;
-void failsafe(crsf_t* rx, bool* active) {
-    if (rx->lq > 50) { *active = false; fs_t0 = 0; return; }
-    if (fs_t0 == 0) fs_t0 = hal_ms();
-    if (hal_ms() - fs_t0 > 500) {
-        *active = true;
-        rx->thr = 1000; rx->r = 0; rx->p = 0; rx->y = 0;
-    }
-}

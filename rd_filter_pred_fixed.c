@@ -80,9 +80,60 @@ float biquad_apply(biquad_filter_t *f, float x) {
     return y;
 }
 
-// Сброс состояния фильтра
-void biquad_reset(biquad_filter_t *f) {
-    f->x1 = f->x2 = f->y1 = f->y2 = 0.0f;
+
+
+/* ============================================================================
+   FFT-BASED DYNAMIC NOTCH (resonance detection)
+   ============================================================================ */
+#define FFT_N 64
+static float gyro_fft_buf[FFT_N];
+static int gyro_fft_idx = 0;
+static float fft_peaks_hz[5];
+static int fft_num_peaks = 0;
+
+/* Простая DFT для поиска резонансов (без CMSIS) */
+static void dft_magnitude(const float *x, int n, float *mag) {
+    for (int k = 0; k < n/2; k++) {
+        float re = 0, im = 0;
+        for (int i = 0; i < n; i++) {
+            float angle = -6.2831853f * k * i / n;
+            re += x[i] * cosf(angle);
+            im += x[i] * sinf(angle);
+        }
+        mag[k] = sqrtf(re*re + im*im);
+    }
+}
+
+void fft_update_gyro(float gyro_val) {
+    gyro_fft_buf[gyro_fft_idx] = gyro_val;
+    gyro_fft_idx = (gyro_fft_idx + 1) % FFT_N;
+    if (gyro_fft_idx != 0) return;
+
+    float mag[FFT_N/2];
+    dft_magnitude(gyro_fft_buf, FFT_N, mag);
+
+    /* средняя амплитуда */
+    float thr = 0;
+    for (int i = 1; i < FFT_N/2; i++) thr += mag[i];
+    thr /= (FFT_N/2 - 1);
+    thr *= 3.0f;
+
+    fft_num_peaks = 0;
+    for (int i = 2; i < FFT_N/2 - 2 && fft_num_peaks < 5; i++) {
+        if (mag[i] > thr && mag[i] > mag[i-1] && mag[i] > mag[i+1] &&
+            mag[i] > mag[i-2] && mag[i] > mag[i+2]) {
+            float freq = (float)i * (3200.0f / FFT_N);
+            if (freq > 50.0f && freq < 1000.0f) {
+                fft_peaks_hz[fft_num_peaks++] = freq;
+            }
+        }
+    }
+}
+
+int fft_get_peaks(float *out, int maxn) {
+    int n = fft_num_peaks < maxn ? fft_num_peaks : maxn;
+    for (int i = 0; i < n; i++) out[i] = fft_peaks_hz[i];
+    return n;
 }
 
 // ============================================================================

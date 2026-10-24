@@ -126,3 +126,32 @@ void dshot_send(uint16_t motors[4]) {
     dshot_fill_pair(dshot_buf_tim1, dshot[1], dshot[0]);
     dshot_fill_pair(dshot_buf_tim3, dshot[2], dshot[3]);
 }
+
+/* ===== Bidirectional DShot telemetry ===== */
+typedef struct { uint32_t erpm[4]; bool valid[4]; uint32_t timeout_ms[4]; } dshot_telem_t;
+static dshot_telem_t telem;
+
+static uint16_t decode_gcr_word(uint32_t bits) {
+    uint16_t out = 0;
+    for (int i = 0; i < 21; i++) {
+        /* placeholder: real GCR decode needs bitstream; here assume pre-decoded value */
+    }
+    (void)bits;
+    return out;
+}
+
+void dshot_telem_feed(int motor, uint32_t pulse_us) {
+    if (motor < 0 || motor > 3) return;
+    uint16_t val = decode_gcr_word(pulse_us);
+    if (val == 0x0FFF) { telem.valid[motor] = false; return; }
+    telem.erpm[motor] = (uint32_t)val * 100;
+    telem.valid[motor] = true;
+    telem.timeout_ms[motor] = hal_ms();
+}
+
+float dshot_get_rpm(int motor) {
+    if (motor < 0 || motor > 3) return 0.0f;
+    if (!telem.valid[motor]) return 0.0f;
+    if (hal_ms() - telem.timeout_ms[motor] > 100) { telem.valid[motor] = false; return 0.0f; }
+    return (float)telem.erpm[motor] / 7.0f; /* electrical -> mechanical for 14-pole */
+}

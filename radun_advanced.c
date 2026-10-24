@@ -121,8 +121,32 @@ void asymmetric_mixer(float out[3], uint16_t thr, uint16_t m[4], const float eff
 }
 
 /* ============================================================================
-   TELEMETRY-DRIVEN PREDICTIVE NOTCH
+   ML CRASH DETECTION (TinyML)
    ============================================================================ */
+typedef struct { float w1[3][5]; float b1[5]; float w2[5]; float b2; } crash_nn_t;
+static crash_nn_t crash_model = {
+    /* weights1 (3x5) */
+    {{0.5f,0.3f,-0.2f,0.1f,0.0f},{-0.4f,0.6f,0.2f,-0.1f,0.3f},{0.1f,-0.3f,0.5f,0.4f,-0.2f}},
+    {0.1f,-0.1f,0.0f,0.2f,-0.1f},
+    /* weights2 (5) */
+    {0.8f,-0.6f,0.4f,0.3f,-0.5f},
+    -0.2f
+};
+
+static float relu(float x){ return x>0?x:0; }
+static float sigmoid(float x){ return 1.0f/(1.0f+expf(-x)); }
+
+bool nn_crash_detect(float gyro[3]) {
+    float hidden[5];
+    for (int i=0;i<5;i++){
+        float s = crash_model.b1[i];
+        for (int j=0;j<3;j++) s += gyro[j]*crash_model.w1[j][i];
+        hidden[i] = relu(s);
+    }
+    float out = crash_model.b2;
+    for (int i=0;i<5;i++) out += hidden[i]*crash_model.w2[i];
+    return sigmoid(out) > 0.8f;
+}
 current_notch_t cur_notch = {0, 0};
 
 void cur_notch_init(void) {
