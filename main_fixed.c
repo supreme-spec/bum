@@ -2,6 +2,11 @@
 #include "radun.h"
 #include "radun_advanced.h"
 #include <math.h>
+#include "watchdog.h"
+#include "failsafe.h"
+#include "dshot_bidir.h"
+#include "rpm_filter.h"
+#include "ubx.h"
 
 void bmi270_process_fixed(imu_t *imu, uint32_t time_ms);
 bool bmi270_is_healthy_fixed(void);
@@ -26,6 +31,7 @@ static uint32_t loop_cnt = 0, bb_cnt = 0;
 static uint32_t last_health_check_ms = 0;
 static uint32_t last_led_update_ms = 0;
 static bool bmi_config_loaded;
+static uint32_t last_rpm_feed_ms = 0;
 
 void TIM6_DAC_IRQHandler(void) {
     uint32_t current_ms = hal_ms();
@@ -60,7 +66,6 @@ void TIM6_DAC_IRQHandler(void) {
 
     bool is_crashed = false;
     if (armed) {
-        /* Do not use the crash model's placeholder weights in flight control. */
         is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
         if (is_crashed) {
             crash_rec_reset_pid(pid.i);
@@ -81,6 +86,22 @@ void TIM6_DAC_IRQHandler(void) {
     } else {
         sp.sp[0] = sp.sp[1] = sp.sp[2] = 0;
         pid.out[0] = pid.out[1] = pid.out[2] = 0;
+    }
+
+    if (rpm_filter_healthy()) {
+        float gyro_filt[3];
+        gyro_filt[0] = rpm_filter_apply(0, imu.dps[0]);
+        gyro_filt[1] = rpm_filter_apply(1, imu.dps[1]);
+        gyro_filt[2] = rpm_filter_apply(2, imu.dps[2]);
+        if (armed && !is_crashed) {
+            float dt = 1.0f / 3200.0f;
+            pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, gyro_filt,
+                       dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
+            for (int axis = 0; axis < 3; axis++) {
+                if (pid.out[axis] >  1000.0f) pid.out[axis] =  1000.0f;
+                if (pid.out[axis] < -1000.0f) pid.out[axis] = -1000.0f;
+            }
+        }
     }
 
     asymmetric_mixer(pid.out, (uint16_t)rx.thr, motors, blade_loss.efficiency);
@@ -109,9 +130,6 @@ void TIM7_IRQHandler(void) {
     while (ADC1->STS & (1 << 1));
     uint16_t vraw = ADC1->RDAT;
     bat.v = ((float)vraw / 4095.0f) * 3.28f * VBAT_FACT;
-
-    float duty = ((float)rx.thr - 1000.0f) / 1000.0f;
-    if (duty < 0) duty = 0;
 
     if (current_ms - last_health_check_ms >= 1000U) {
         last_health_check_ms = current_ms;
@@ -178,6 +196,12 @@ int main(void) {
     IWDG->KR = 0xAAAA;
     IWDG->KR = 0xCCCC;
 
+    watchdog_init(200);
+    failsafe_init();
+    dshot_bidir_init();
+    rpm_filter_init();
+    ubx_init();
+
     NVIC_SetPriority(54, 0);
     NVIC_SetPriority(55, 1);
     NVIC_ISER1 = (1 << 22) | (1 << 23);
@@ -201,7 +225,22 @@ int main(void) {
 
     while (1) {
         flash_log_process();
-        IWDG->KR = 0xAAAA;
-        asm volatile("wfi");
+        dshot_bidir_process_telemetry();
+        uint32_t now_ms = hal_ms();
+        if (now_ms - last_rpm_feed_ms >= 2) {
+            last_rpm_feed_ms = now_ms;
+            for (int m = 0; m < 4; m++) {
+                const esc_telemetry_t *t = dshot_bidir_get_telemetry(m);
+                if (t && t->valid && t->erpm > 0) {
+                    rpm_filter_feed_erpm(m, t->erpm);
+                }
+            }
+            dshot_bidir_request_telemetry_all();
+        }
+        rpm_filter_update_coeffs();
+        ubx_process();
+        failsafe_update_gps_from_ubx();
+        watchdog_feed();
+        __asm__ volatile ("nop");
     }
 }

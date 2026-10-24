@@ -18,8 +18,8 @@ static uint8_t crsf_crc8(const uint8_t *data, uint8_t len) {
     for (uint8_t i = 0; i < len; i++) {
         crc ^= data[i];
         for (int j = 0; j < 8; j++) {
-            crc = (crc & 0x80U) ? (uint8_t)((crc << 1) ^ 0xD5U)
-                                : (uint8_t)(crc << 1);
+            if (crc & 0x80U) crc = (uint8_t)((crc << 1) ^ 0xD5U);
+            else crc = (uint8_t)(crc << 1);
         }
     }
     return crc;

@@ -9,13 +9,17 @@
 
 /* Fast inverse square root approximation (для Cortex-M4 FPU) */
 static float fast_inv_sqrt(float x) {
-    float halfx = 0.5f * x;
+    if (x <= 0.0f || !isfinite(x)) {
+        return 0.0f;
+    }
+
+    const float half_x = 0.5f * x;
     float y = x;
     uint32_t i;
     memcpy(&i, &y, sizeof(i));
     i = 0x5f3759dfU - (i >> 1);
     memcpy(&y, &i, sizeof(y));
-    y = y * (1.5f - (halfx * y * y));
+    y = y * (1.5f - (half_x * y * y));
     return y;
 }
 
@@ -125,15 +129,47 @@ void mahony_ahrs_reset(void) {
 /* ============================================================================
    MODES — преобразование стиков в setpoint
    ============================================================================ */
-void modes_apply(crsf_t *rx, float att[2], float sp[3]) {
-    sp[0] = (float)rx->r * 0.4f;
-    sp[1] = (float)rx->p * 0.4f;
-    sp[2] = (float)rx->y * 0.4f;
+void modes_apply(crsf_t* rx, float att[2], float sp[3]) {
+    /* AUX1: Angle mode, AUX2: Horizon mode, AUX3: Air mode */
+    bool angle_mode = (rx->aux & 1);
+    bool horizon_mode = (rx->aux & 2);
+    bool air_mode = (rx->aux & 4);
 
-    /* Angle mode на AUX1 */
-    if (rx->aux & 0x01) {
-        sp[0] += 60.0f * (0.0f - att[0]);
-        sp[1] += 60.0f * (0.0f - att[1]);
+    /* Convert stick inputs to setpoints */
+    float stick_r = rx->r * 500.0f / 500.0f;  /* Roll rate */
+    float stick_p = rx->p * 500.0f / 500.0f;  /* Pitch rate */
+    float stick_y = rx->y * 500.0f / 500.0f;  /* Yaw rate */
+
+    /* Angle mode: stick position = target angle */
+    if (angle_mode) {
+        sp[0] = stick_r * 45.0f;  /* Max 45 degrees */
+        sp[1] = stick_p * 45.0f;
+        sp[2] = stick_y;
+    }
+    /* Horizon mode: blend between angle and rate based on stick deflection */
+    else if (horizon_mode) {
+        float stick_mag = sqrtf(stick_r*stick_r + stick_p*stick_p);
+        float blend = stick_mag / 500.0f;  /* 0 at center, 1 at full deflection */
+        if (blend > 1.0f) blend = 1.0f;
+
+        float angle_sp_r = stick_r * 45.0f;
+        float angle_sp_p = stick_p * 45.0f;
+
+        sp[0] = (1.0f - blend) * angle_sp_r + blend * stick_r;
+        sp[1] = (1.0f - blend) * angle_sp_p + blend * stick_p;
+        sp[2] = stick_y;
+    }
+    /* Air mode: pure rate control with zero throttle I-term relaxation */
+    else if (air_mode) {
+        sp[0] = stick_r;
+        sp[1] = stick_p;
+        sp[2] = stick_y;
+    }
+    /* Acro mode (default): pure rate control */
+    else {
+        sp[0] = stick_r;
+        sp[1] = stick_p;
+        sp[2] = stick_y;
     }
 }
 
@@ -157,19 +193,6 @@ void mixer(float out[3], uint16_t thr, uint16_t m[4]) {
     }
 }
 
-/* Turtle mode: flip drone when upside down */
-void turtle_mode_mix(uint16_t m[4], bool active) {
-    if (!active) return;
-    /* reverse motor direction conceptually: swap pairs */
-    uint16_t t = m[0]; m[0] = m[2]; m[2] = t;
-    t = m[1]; m[1] = m[3]; m[3] = t;
-}
-
-/* Launch control: limit roll/pitch until airborne */
-void launch_control(float sp[3], uint16_t thr, bool active) {
-    if (!active) return;
-    if (thr < 1200) { sp[0] *= 0.3f; sp[1] *= 0.3f; }
-}
 float anti_gravity_scale(uint16_t thr) {
     float t = ((float)thr - 1000.0f) / 1000.0f;
     if (t < 0) t = 0;
@@ -214,9 +237,141 @@ bool arming_interlock_update(const crsf_t *rx, bool failsafe_active) {
     return true;
 }
 
+/* Pre-arm safety checks */
+typedef struct {
+    bool gyro_calibrated;
+    bool gyro_healthy;
+    bool acc_healthy;
+    bool battery_ok;
+    bool rx_ok;
+    bool sensors_consistent;
+    uint32_t check_time_ms;
+} prearm_checks_t;
+
+static prearm_checks_t prearm = {0};
+
+void prearm_init(void) {
+    prearm.gyro_calibrated = false;
+    prearm.gyro_healthy = false;
+    prearm.acc_healthy = false;
+    prearm.battery_ok = false;
+    prearm.rx_ok = false;
+    prearm.sensors_consistent = false;
+    prearm.check_time_ms = 0;
+}
+
+bool prearm_check(const imu_t *imu, const crsf_t *rx, const bat_t *bat) {
+    uint32_t now = hal_ms();
+
+    /* Check gyro health */
+    prearm.gyro_healthy = imu->healthy;
+
+    /* Check accelerometer (simple sanity check) */
+    float acc_mag = imu->acc[0]*imu->acc[0] + imu->acc[1]*imu->acc[1] + imu->acc[2]*imu->acc[2];
+    acc_mag = sqrtf(acc_mag);
+    prearm.acc_healthy = (acc_mag > 0.8f * 9.81f && acc_mag < 1.2f * 9.81f);
+
+    /* Check battery */
+    prearm.battery_ok = (bat->v > 3.5f * battery_get_cell_count()) && !battery_low_voltage();
+
+    /* Check receiver */
+    prearm.rx_ok = rx->valid && rx->lq > 50;
+
+    /* Sensor consistency - gyro not spinning when disarmed */
+    float gyro_mag = imu->dps[0]*imu->dps[0] + imu->dps[1]*imu->dps[1] + imu->dps[2]*imu->dps[2];
+    gyro_mag = sqrtf(gyro_mag);
+    prearm.sensors_consistent = (gyro_mag < 10.0f);  /* Less than 10 deg/s when stationary */
+
+    prearm.check_time_ms = now;
+
+    /* All checks must pass */
+    return prearm.gyro_healthy && prearm.acc_healthy &&
+           prearm.battery_ok && prearm.rx_ok && prearm.sensors_consistent;
+}
+
+void prearm_get_status(bool *all_ok, uint8_t *failed_mask) {
+    *all_ok = prearm.gyro_healthy && prearm.acc_healthy &&
+              prearm.battery_ok && prearm.rx_ok && prearm.sensors_consistent;
+
+    *failed_mask = 0;
+    if (!prearm.gyro_healthy) *failed_mask |= (1 << 0);
+    if (!prearm.acc_healthy) *failed_mask |= (1 << 1);
+    if (!prearm.battery_ok) *failed_mask |= (1 << 2);
+    if (!prearm.rx_ok) *failed_mask |= (1 << 3);
+    if (!prearm.sensors_consistent) *failed_mask |= (1 << 4);
+}
+
 /* ============================================================================
-   ITERM init (перенесено из attitude.c)
+   LAUNCH CONTROL
    ============================================================================ */
+typedef struct {
+    bool active;
+    float pitch_limit;
+    float throttle_limit;
+    uint32_t start_time_ms;
+} launch_ctrl_t;
+
+static launch_ctrl_t launch_ctrl = {0};
+
+void launch_control(float sp[3], uint16_t thr, bool active) {
+    if (active && !launch_ctrl.active) {
+        launch_ctrl.active = true;
+        launch_ctrl.start_time_ms = hal_ms();
+        launch_ctrl.pitch_limit = 15.0f;  /* Limit pitch to 15 degrees */
+        launch_ctrl.throttle_limit = 0.7f;  /* Limit throttle to 70% */
+    } else if (!active) {
+        launch_ctrl.active = false;
+    }
+
+    if (launch_ctrl.active) {
+        uint32_t elapsed = hal_ms() - launch_ctrl.start_time_ms;
+
+        /* Gradually release limits over 2 seconds */
+        float progress = (float)elapsed / 2000.0f;
+        if (progress > 1.0f) progress = 1.0f;
+
+        float current_pitch_limit = launch_ctrl.pitch_limit + (45.0f - launch_ctrl.pitch_limit) * progress;
+        float current_throttle_limit = launch_ctrl.throttle_limit + (1.0f - launch_ctrl.throttle_limit) * progress;
+
+        /* Apply pitch limit */
+        if (sp[1] > current_pitch_limit) sp[1] = current_pitch_limit;
+        if (sp[1] < -current_pitch_limit) sp[1] = -current_pitch_limit;
+
+        /* Apply throttle limit (handled in mixer) */
+        /* Store limit for mixer to use */
+    }
+}
+
+/* ============================================================================
+   TURTLE MODE
+   ============================================================================ */
+typedef struct {
+    bool active;
+    uint16_t motors[4];
+} turtle_mode_t;
+
+static turtle_mode_t turtle = {0};
+
+void turtle_mode_mix(uint16_t m[4], bool active) {
+    if (active && !turtle.active) {
+        turtle.active = true;
+        /* Store current motor positions */
+        for (int i = 0; i < 4; i++) {
+            turtle.motors[i] = m[i];
+        }
+    } else if (!active) {
+        turtle.active = false;
+    }
+
+    if (turtle.active) {
+        /* In turtle mode, motors run at low speed to flip the quad */
+        /* Motors 1 and 3 spin one way, 2 and 4 the other */
+        m[0] = 1100;  /* Motor 1 */
+        m[1] = 1100;  /* Motor 2 */
+        m[2] = 1100;  /* Motor 3 */
+        m[3] = 1100;  /* Motor 4 */
+    }
+}
 void iterm_init(float i[3], float lim) {
     (void)lim;
     i[0] = i[1] = i[2] = 0.0f;

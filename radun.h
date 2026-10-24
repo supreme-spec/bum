@@ -149,6 +149,7 @@ extern current_notch_t cur_notch;
 
 void hal_init(void);
 uint32_t hal_ms(void);
+uint32_t micros(void);
 void delay_ms(uint32_t);
 void delay_us(uint32_t);
 void gpio_out(GPIO_t*, uint16_t);
@@ -160,13 +161,18 @@ void spi_init(SPI_t* s);
 void i2c_write(uint8_t, uint8_t, uint8_t);
 uint8_t i2c_read(uint8_t, uint8_t);
 void uart_init(UART_t*, uint32_t);
+void uart_putc(UART_t* u, uint8_t b);
+bool uart_getc(UART_t* u, uint8_t *b);
 void NVIC_SetPriority(uint8_t IRQn, uint32_t priority);
+void NVIC_SystemReset(void);
 
 void bmi270_real_init(void);
 void bmi270_process(imu_t *imu);
 void bmi270_calibrate(void);
 int bmi270_config_upload(void);
 bool bmi270_is_healthy(void);
+void bmi270_set_gyro_rate(uint16_t odr);
+uint16_t bmi270_get_gyro_rate(void);
 void dshot_init_all(void);
 void dshot_send(uint16_t motors[4]);
 bool dshot_output_available(void);
@@ -176,10 +182,14 @@ void crsf_init(void);
 void crsf_poll(crsf_t* out);
 void pid_init(float kp[3], float ki[3], float kd[3], float kf[3], float out[3], float i[3], float gp[3], float dl[3]);
 void pid_update(float kp[3], float ki[3], float kd[3], float kf[3], float sp[3], float dps[3], float dt, float thr, float out[3], float i[3], float gp[3], float dl[3]);
+void pid_set_d_weight(float weight[3]);
 void modes_apply(crsf_t* rx, float att[2], float sp[3]);
 void mixer(float out[3], uint16_t thr, uint16_t m[4]);
 void failsafe(crsf_t* rx, bool* active);
 bool arming_interlock_update(const crsf_t *rx, bool failsafe_active);
+void prearm_init(void);
+bool prearm_check(const imu_t *imu, const crsf_t *rx, const bat_t *bat);
+void prearm_get_status(bool *all_ok, uint8_t *failed_mask);
 float vbat_sag_compensate(float vbat, float current);
 float anti_gravity_scale(uint16_t thr);
 void turtle_mode_mix(uint16_t m[4], bool active);
@@ -188,6 +198,9 @@ void imu_update_attitude(float dps[3], float acc[3], float att[2], float dt);
 void filt_init(float n[3][3][5], float fs, float frame);
 void filt_apply(float n[3][3][5], float dps[3]);
 void filt_notch_update(float n[3][3][5], int axis, int stage, float fc, float q, float fs);
+void acc_filter_init(void);
+void acc_filter_update(const float acc[3], uint32_t time_ms);
+float acc_filter_get_freq(int axis);
 void rpm_init(float* model, float* meas, float* fused, float* conf, float hz[3]);
 void rpm_update(float* model, float* meas, float* fused, float* conf, float hz[3], float vbat, float duty);
 void iterm_init(float i[3], float lim);
@@ -200,6 +213,25 @@ void pg_upd(float ip, float didt, float dilp, float thr, float mismatch,
 float pg_scale(float scale, int8_t axis, int a);
 void bmp280_init(void);
 void bmp280_read(baro_t *baro);
+
+/* Battery management */
+void battery_init(void);
+void battery_update(float vbat, float current);
+float battery_get_compensated_voltage(void);
+bool battery_low_voltage(void);
+uint8_t battery_get_cell_count(void);
+
+/* USB CDC/VCP */
+void usb_cdc_init(void);
+bool usb_cdc_is_connected(void);
+void usb_cdc_send(const uint8_t *data, uint16_t len);
+uint16_t usb_cdc_receive(uint8_t *data, uint16_t max_len);
+void usb_cdc_poll(void);
+
+/* CLI interface */
+void cli_init(void);
+void cli_feed(uint8_t c);
+void cli_print(const char *str);
 
 void flash_log_init(void);
 void flash_log(uint32_t loop_cnt, const imu_t *imu, const pid_t *pid, const uint16_t motors[4], const bat_t *bat);

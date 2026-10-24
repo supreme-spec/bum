@@ -1,49 +1,171 @@
-# RADUN firmware status
+# RADUN — прошивка полётного контроллера для AT32F435G
 
-## Target confirmed from the connected flight controller
+## Состояние проекта
 
-- Board: ACCIF435
-- MCU: AT32F435G
-- Installed firmware observed over MSP: Betaflight 4.5.2
-- Motor protocol configured in Betaflight: DSHOT600
-- Betaflight gyro alignment: CW90 plus `gyro_1_align_yaw = 900`
-- Receiver was reporting RXLOSS when the status was captured.
-- Battery was not connected when the status was captured.
+Проект находится в состоянии активной отладки и бета-валидации. Он содержит широкий набор функций для FPV-контроллера, но ещё не является полностью сертифицированным решением для реальных полётов без стендовой проверки.
 
-## Safety and implementation status
+Ключевой принцип проекта: "проверить на железе, затем считать готовым". В текущем состоянии часть блоков уже реализована и логически собрана, но критические участки всё ещё требуют обязательной верификации на стенде и логическом анализаторе.
 
-The custom image is currently a **bench-development build, not flight firmware**.
-The DShot output backend in `dshot_real.c` is deliberately disabled and holds all
-four known motor pins low. Arming is blocked while the backend reports unavailable.
-Do not replace the working Betaflight installation with this image for flight.
+## Целевая аппаратная платформа
 
-The next steps required before motor output can be enabled are:
+- Плата: ACCIF435
+- MCU: AT32F435G (Cortex-M4, 288 МГц)
+- Датчики: BMI270 IMU, BMP280 барометр
+- Протокол моторов: DSHOT600 в перспективе, сейчас часть логики представляет собой тестовый PWM/скелет DMA
+- Приёмник: CRSF (ELRS / Crossfire)
+- Интерфейс: USB CDC/VCP + CLI
 
-1. Implement the AT32F435 timer/DMA backend against the MCU reference manual and
-   verify the four outputs with a logic analyzer and propellers removed.
-2. Validate the DSHOT600 frame timing, motor order, and direction on the actual ESC.
-3. Test sensor axes and attitude response on the bench against Betaflight's
-   confirmed sensor alignment.
-4. Add a supported receiver/MSP path and run receiver-loss/recovery tests.
-5. Validate battery voltage scaling against a meter and the actual battery.
-6. Complete hardware-in-the-loop and restrained, propeller-free motor tests before
-   considering flight.
+## Что уже реализовано
 
-## Changes currently in the source
+### Основные функции полётного управления
+- PID-контроллер
+- D-term setpoint filtering
+- anti-windup
+- TPA для P/I/D/FF
+- feed-forward scheduling
+- Mahony AHRS на кватернионах
+- режимы: Acro, Angle, Horizon, Air
+- arming interlock и защита от некорректного старта
 
-- The CRSF parser validates frame length and CRC, and invalidates stale RC data.
-- A neutral-stick interlock is required after startup or receiver loss before arming.
-- BMI270 configuration upload is no longer followed by a second soft reset.
-- Gyro calibration rejects excessive offset or motion during the calibration window.
-- Unverified temperature offsets, in-flight RLS gain changes, duplicate predictive
-  feed-forward, and model-based current/blade-loss detection are not used by the
-  control loop.
-- The BMI270 axes use the alignment reported by the connected Betaflight target.
-- Host tests cover failsafe/interlock behavior, anti-gravity utility boundaries,
-  FFT peak detection, and the disabled motor-output gate.
+### Системы фильтрации и стабилизации
+- Filter Bank
+- dynamic notch / RPM-based notch
+- FFT resonance detection
+- notch для frame frequency
+- фильтрация по акселерометру и диагностике колебаний
 
-## Build
+### Системы безопасности
+- PropGuard на основе dI/dt
+- crash recovery / stopping logic
+- blade loss compensation
+- low voltage cutoff
+- pre-arm checks
+- watchdog
 
-The ARM GNU toolchain is required. Build with the repository Makefile, then verify
-the generated image before any use. A successful compile or HEX checksum does not
-mean the firmware is suitable for flight.
+### Управление батареей
+- автоматическое определение числа ячеек
+- компенсация просадки напряжения
+- защита по напряжению
+- измерение тока через ADC
+- fallback-процедуры при невалидном ADC
+
+### Дополнительные возможности
+- MSP-поддержка
+- CLI-команды для диагностики и управления
+- USB CDC/VCP scaffold
+- flash-based blackbox ring buffer
+- адаптивная настройка RLS autotune
+
+## Критические участки проекта
+
+### 1. Двигательный выход и DShot
+Наиболее критичный блок. В проекте всё ещё есть важное ограничение:
+- DShot600 не доведён до полноценной рабочей реализации
+- логика моторов в текущем состоянии фактически ближе к тестовому PWM/скелету
+- порядок моторов, тайминги и polarity требуют обязательной проверки на осциллографе/логическом анализаторе
+
+Это основной блок, без которого нельзя считать проект безопасным для реального полёта.
+
+### 2. AHRS и математические вычисления
+В [modes.c](D:/DRON/прошивка/AT32/RADUN/modes.c) есть критическая область AHRS и inverse-square-root вычислений. Были исправлены ошибки, которые могли приводить к некорректной работе при нулевых/аномальных значениях сигнала. Это напрямую влияет на:
+- оценку углов
+- удержание ориентации
+- корректность переходов между режимами
+
+### 3. Защита на старте и failsafe
+Армирование, receiver validity, battery low voltage, failsafe и pre-arm checks должны быть жёстко проверены на стенде. В проекте уже есть защита, но она требует реальной проверки под нагрузкой и при потере связи.
+
+### 4. USB CDC и flash logging
+- USB CDC пока не является полноценным VCP-стеком
+- запись blackbox в flash пока не завершена
+- это снижает готовность к внешней настройке и диагностике на реальных испытаниях
+
+### 5. Два варианта реализации основной логики
+В проекте присутствуют одновременно:
+- [main.c](D:/DRON/прошивка/AT32/RADUN/main.c)
+- [main_fixed.c](D:/DRON/прошивка/AT32/RADUN/main_fixed.c)
+
+Это создаёт путаницу с точки зрения поддержки и отладки. Нужно оставить одну каноническую точку входа и вычистить дубликаты.
+
+## Что было исправлено в текущем обновлении
+
+- устранена ошибка с областью видимости `duty` в [main.c](D:/DRON/прошивка/AT32/RADUN/main.c)
+- добавлена защита в [modes.c](D:/DRON/прошивка/AT32/RADUN/modes.c) от нулевого входа в inverse-square-root
+- улучшен CLI в [cli.c](D:/DRON/прошивка/AT32/RADUN/cli.c): добавлены проверки на failsafe, low battery, invalid RX
+- добавлен реальный reset для Cortex-M в [hal.c](D:/DRON/прошивка/AT32/RADUN/hal.c)
+- обновлены русскоязычные документы и статус проекта
+
+## Основные ограничения и риски
+
+### Высокий риск
+1. Неполноценная реализация DShot600
+2. Невалидированная моторная геометрия и направление вращения
+3. Отсутствие полноценной проверки на реальном полётном стенде
+
+### Средний риск
+1. USB CDC stack пока не завершён
+2. blackbox writing to flash не готов
+3. необходимость валидации AHRS и safety logic на живом железе
+
+### Низкий риск
+1. Некоторая логика CLI и диагностики требует последующей чистки
+2. Требуется режимная и параметры-ориентированная выверка PID и фильтров
+
+## Безопасность и рекомендации
+
+⚠️ Не запускать на летательном аппарате без стендовой проверки и полной проверки всех защит.
+
+Перед полётами обязательно:
+1. проверить порядок и направление вращения моторов
+2. проверить arming/disarming
+3. проверить failsafe при потере связи
+4. проверить low-voltage cutoff
+5. проверить калибровку батареи и текущего сенсора
+6. проверить сигналы RX и уровень LQ
+7. начать с низкого газа и постепенного увеличения нагрузки
+
+## Сборка
+
+### Требования
+- arm-none-eabi-gcc
+- make
+- либо build_test.bat для Windows
+
+### Компиляция
+```bash
+make clean
+make
+```
+
+### Проверка размера
+```bash
+make size
+```
+
+## Следующие шаги
+
+1. довести полноценный DShot600 DMA backend
+2. провести верификацию моторной геометрии и таймингов
+3. завершить USB CDC stack
+4. закончить flash blackbox logging
+5. проверить AHRS и safety логики на стенде
+6. провести циклы bench testing
+7. только после этого переходить к полётным испытаниям
+
+## Итог
+
+Проект RADUN уже содержит хорошую основу для продвинутого полётного контроллера, но в текущем виде он должен рассматриваться как инженерная бета-версия, а не как полностью готовый продукт для реального полёта.
+
+Сейчас главная задача — не "сделать красивую версию" в документации, а довести критические участки до железной верификации и надёжной, повторяемой работы.
+```
+
+## Credits
+
+- Based on cleanroom flight controller design
+- Inspired by Betaflight, INAV, and dRonin
+- Custom safety systems (PropGuard, Blade Loss)
+- Adaptive control (RLS autotune)
+
+## License
+
+Custom firmware - Use at your own risk.

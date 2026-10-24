@@ -18,13 +18,16 @@ void SystemInit(void) {
 
 void SysTick_Handler(void) { ms_cnt++; }
 uint32_t hal_ms(void) { return ms_cnt; }
+uint32_t micros(void) {
+    return DWT->CYCCNT / 288U;
+}
 void delay_ms(uint32_t m) { uint32_t start = hal_ms(); while (hal_ms() - start < m); }
 void delay_us(uint32_t u) { uint32_t t = DWT->CYCCNT + u * 288; while (DWT->CYCCNT < t); }
 
 void hal_init(void) {
     RCC->AHB1 |= 0x07;
-    RCC->APB2 |= (1 << 12) | (1 << 8);
-    RCC->APB1 |= (1 << 14) | (1 << 21);
+    RCC->APB2 |= (1 << 12) | (1 << 8) | (1 << 4);
+    RCC->APB1 |= (1 << 14) | (1 << 21) | (1 << 17) | (1 << 18);
 }
 
 void gpio_out(GPIO_t* p, uint16_t pin) {
@@ -90,6 +93,30 @@ uint8_t i2c_read(uint8_t addr, uint8_t reg) {
 void uart_init(UART_t* u, uint32_t baud) {
     u->BAUD = APB2_HZ / (16 * baud);
     u->CTRL1 = (1<<3)|(1<<2)|(1<<13);
+}
+
+void uart_putc(UART_t* u, uint8_t b) {
+    uint32_t to = 100000;
+    while (!(u->STS & (1<<7))) { if(--to == 0) break; }
+    u->DT = b;
+}
+
+bool uart_getc(UART_t* u, uint8_t *b) {
+    if (u->STS & (1<<4)) {
+        *b = (uint8_t)u->DT;
+        return true;
+    }
+    return false;
+}
+
+void NVIC_SystemReset(void) {
+    __disable_irq();
+    __DSB();
+    __ISB();
+    SCB[0x0C >> 2] = 0x05FA0004U;
+    while (1) {
+        __NOP();
+    }
 }
 
 void NVIC_SetPriority(uint8_t IRQn, uint32_t priority) {

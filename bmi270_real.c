@@ -13,6 +13,7 @@
 static int16_t gyro_offset[3] = {0, 0, 0};
 static bool calibrated = false;
 static bool healthy = false;
+static uint16_t gyro_odr = 3200;  /* Default ODR */
 
 static int abs_i(int v) { return v < 0 ? -v : v; }
 
@@ -40,15 +41,20 @@ void bmi270_real_init(void) {
 }
 
 void bmi270_process(imu_t *imu) {
+    /* Gyro sync optimization: burst read with minimal CS toggling */
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
+    delay_us(1);  /* CS setup time */
+
+    /* Read gyro + accel in one burst (12 bytes) */
     spi_rw(SPI1, BMI_GYR_X_L | 0x80);
-    (void)spi_rw(SPI1, 0xFF);
+
     int16_t g[3], a[3];
     for (int i = 0; i < 6; i++) {
         uint8_t l = spi_rw(SPI1, 0xFF), h = spi_rw(SPI1, 0xFF);
         int16_t v = (int16_t)((uint16_t)l | ((uint16_t)h << 8));
         if (i < 3) g[i] = v; else a[i-3] = v;
     }
+
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
 
     if (calibrated) {
@@ -91,4 +97,20 @@ void bmi270_calibrate(void) {
     }
 }
 
-bool bmi270_is_healthy(void) { return healthy; }
+bool bmi270_is_healthy(void) {
+    return healthy;
+}
+
+void bmi270_set_gyro_rate(uint16_t odr) {
+    /* BMI270 supported ODRs: 25, 50, 100, 200, 400, 800, 1600, 3200 Hz */
+    if (odr == 25 || odr == 50 || odr == 100 || odr == 200 ||
+        odr == 400 || odr == 800 || odr == 1600 || odr == 3200) {
+        gyro_odr = odr;
+        /* Note: Requires reconfiguration of BMI270 registers */
+        /* For now, just store the value */
+    }
+}
+
+uint16_t bmi270_get_gyro_rate(void) {
+    return gyro_odr;
+}
