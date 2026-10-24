@@ -68,7 +68,11 @@ void TIM6_DAC_IRQHandler(void) {
 
     bool is_crashed = false;
     if (armed) {
-        is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
+        if (nn_crash_detect(imu.dps)) {
+            is_crashed = true;
+        } else {
+            is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
+        }
         if (is_crashed) {
             crash_rec_reset_pid(pid.i);
             sp.sp[0] = sp.sp[1] = sp.sp[2] = 0;
@@ -96,37 +100,12 @@ void TIM6_DAC_IRQHandler(void) {
 
     if (armed && !is_crashed) {
         float dt = 1.0f / 3200.0f;
+        pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, imu.dps, dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
+        float ff_pred[3];
+        pred_ff_update(sp.sp, ff_pred, dt);
         for (int axis = 0; axis < 3; axis++) {
-            float error = sp.sp[axis] - imu.dps[axis];
-
-            static float lp[3] = {0};
-            float alpha = dt / (dt + 1.0f / (6.2831853f * 15.0f));
-            lp[axis] += alpha * (sp.sp[axis] - lp[axis]);
-            float hp = sp.sp[axis] - lp[axis];
-            float relax = 1.0f / (1.0f + (hp*hp) / 810000.0f);
-
-            pid.i[axis] += pid.ki[axis] * error * 0.01f * relax * dt;
-            if (error * pid.i[axis] > 0.0f) pid.i[axis] *= 0.995f;
-            if (pid.i[axis] >  400.0f) pid.i[axis] =  400.0f;
-            if (pid.i[axis] < -400.0f) pid.i[axis] = -400.0f;
-
-            float p_term = pid.kp[axis] * error * 0.01f;
-
-            float tpa = 1.0f;
-            if (rx.thr > 1500) {
-                tpa = 1.0f - 0.5f * ((float)(rx.thr - 1500) / 500.0f);
-            }
-            float d_raw = -(imu.dps[axis] - pid.gp[axis]) / dt;
-            pid.dl[axis] += 0.15f * (d_raw - pid.dl[axis]);
-            float d_term = pid.kd[axis] * pid.dl[axis] * 0.0001f * tpa;
-
-            float ff = pid.kf[axis] * sp.sp[axis] * 0.01f;
-
-            pid.out[axis] = p_term + pid.i[axis] + d_term + ff + ff_pred[axis];
-            pid.gp[axis] = imu.dps[axis];
-
+            pid.out[axis] += ff_pred[axis];
             pid.out[axis] *= propguard_get_scale(axis);
-
             if (pid.out[axis] >  1000.0f) pid.out[axis] =  1000.0f;
             if (pid.out[axis] < -1000.0f) pid.out[axis] = -1000.0f;
         }
@@ -190,7 +169,7 @@ void TIM7_IRQHandler(void) {
             bmi270_reset_health();
             if (!imu.healthy) {
                 armed = false;
-                uint16_t off[4] = {1000, 1000, 1000, 1000};
+        uint16_t off[4] = {0, 0, 0, 0};
                 dshot_send(off);
             }
         }
