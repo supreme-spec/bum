@@ -80,6 +80,13 @@ float biquad_apply(biquad_filter_t *f, float x) {
     return y;
 }
 
+static void biquad_reset(biquad_filter_t *f) {
+    f->x1 = 0.0f;
+    f->x2 = 0.0f;
+    f->y1 = 0.0f;
+    f->y2 = 0.0f;
+}
+
 
 
 /* ============================================================================
@@ -87,7 +94,9 @@ float biquad_apply(biquad_filter_t *f, float x) {
    ============================================================================ */
 #define FFT_N 64
 static float gyro_fft_buf[FFT_N];
+static float fft_pending_buf[FFT_N];
 static int gyro_fft_idx = 0;
+static volatile bool fft_pending = false;
 static float fft_peaks_hz[5];
 static int fft_num_peaks = 0;
 
@@ -109,8 +118,20 @@ void fft_update_gyro(float gyro_val) {
     gyro_fft_idx = (gyro_fft_idx + 1) % FFT_N;
     if (gyro_fft_idx != 0) return;
 
+    if (fft_pending) return;
+    memcpy(fft_pending_buf, gyro_fft_buf, sizeof(fft_pending_buf));
+    fft_pending = true;
+}
+
+void fft_process(void) {
+    if (!fft_pending) return;
+
+    float samples[FFT_N];
+    memcpy(samples, fft_pending_buf, sizeof(samples));
+    fft_pending = false;
+
     float mag[FFT_N/2];
-    dft_magnitude(gyro_fft_buf, FFT_N, mag);
+    dft_magnitude(samples, FFT_N, mag);
 
     /* средняя амплитуда */
     float thr = 0;
@@ -131,6 +152,7 @@ void fft_update_gyro(float gyro_val) {
 }
 
 int fft_get_peaks(float *out, int maxn) {
+    if (out == NULL || maxn <= 0) return 0;
     int n = fft_num_peaks < maxn ? fft_num_peaks : maxn;
     for (int i = 0; i < n; i++) out[i] = fft_peaks_hz[i];
     return n;

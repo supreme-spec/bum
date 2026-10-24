@@ -18,7 +18,7 @@ ASFLAGS = $(CPU)
 LDFLAGS = $(CPU) -T AT32F435G.ld -Wl,--gc-sections -nostartfiles \
           -Wl,-Map=$(TARGET).map
 
-SRCS_C = main_fixed.c hal.c bmi270_fixed.c dshot_real.c crsf.c pid.c modes.c \
+SRCS_C = main_fixed.c hal.c bmi270_real.c bmi270_fixed.c dshot_real.c crsf.c pid.c modes.c \
          rd_filter_pred_fixed.c bmp280.c flash_log.c bmi270_config_file.c \
          radun_advanced.c radun_rls_tuning.c msp.c
 

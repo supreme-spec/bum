@@ -1,26 +1,13 @@
 /* main_fixed.c — полная интеграция всех подсистем */
 #include "radun.h"
-#include "radun_rls_tuning.h"
 #include "radun_advanced.h"
 #include <math.h>
 
 void bmi270_process_fixed(imu_t *imu, uint32_t time_ms);
 bool bmi270_is_healthy_fixed(void);
-void bmi270_calibrate_fixed(void);
-void bmi270_reset_health(void);
-bool bmi270_recal_pending(void);
-void bmi270_do_recal(void);
-
 void filter_bank_init(float frame_hz, float fs, float slew_rate);
-void filter_bank_update_rpm(float rpm_hz, float rpm_confidence, uint32_t time_ms);
 void filter_bank_apply(float dps[3]);
 void filter_bank_reset(void);
-void filter_bank_get_frequencies(float fc[3][3]);
-
-void propguard_init(float threshold, float mismatch, uint32_t cooldown_ms);
-void propguard_update(float current, float gyro[3], float sp[3], uint32_t time_ms);
-float propguard_get_scale(int axis);
-void propguard_reset(void);
 
 void flash_log_process(void);
 
@@ -36,14 +23,9 @@ uint16_t motors[4];
 bool armed = false, fs_active = false;
 
 static uint32_t loop_cnt = 0, bb_cnt = 0;
-static uint32_t last_rpm_update_ms = 0;
 static uint32_t last_health_check_ms = 0;
-static uint32_t boot_time_ms = 0;
 static uint32_t last_led_update_ms = 0;
-
-static float estimated_current = 0.0f;
-
-float filter_freqs[3][3];
+static bool bmi_config_loaded;
 
 void TIM6_DAC_IRQHandler(void) {
     uint32_t current_ms = hal_ms();
@@ -54,25 +36,32 @@ void TIM6_DAC_IRQHandler(void) {
     imu_update_attitude(imu.dps, imu.acc, imu.att, 1.0f/3200.0f);
     crsf_poll(&rx);
 
-    if (!armed && imu.healthy && rx.thr < 1050 && rx.y > 700 && rx.r < -200 && rx.p < -200) {
+    failsafe(&rx, &fs_active);
+    bool arming_allowed = arming_interlock_update(&rx, fs_active);
+    if (fs_active && armed) {
+        armed = false;
+        pid.i[0] = pid.i[1] = pid.i[2] = 0;
+        pid.out[0] = pid.out[1] = pid.out[2] = 0;
+        flash_log_stop();
+    }
+
+    if (!armed && arming_allowed && !fs_active && bmi_config_loaded &&
+        dshot_output_available() && rx.valid && imu.healthy &&
+        rx.thr < 1050 && rx.y > 700 && rx.r < -200 && rx.p < -200) {
         armed = true;
         pid.i[0] = pid.i[1] = pid.i[2] = 0;
         filter_bank_reset();
-        propguard_reset();
         flash_log_start();
     }
-    if (armed && rx.thr < 1050 && rx.y < -700) {
+    if (armed && rx.valid && rx.thr < 1050 && rx.y < -700) {
         armed = false;
         flash_log_stop();
     }
 
     bool is_crashed = false;
     if (armed) {
-        if (nn_crash_detect(imu.dps)) {
-            is_crashed = true;
-        } else {
-            is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
-        }
+        /* Do not use the crash model's placeholder weights in flight control. */
+        is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
         if (is_crashed) {
             crash_rec_reset_pid(pid.i);
             sp.sp[0] = sp.sp[1] = sp.sp[2] = 0;
@@ -81,31 +70,11 @@ void TIM6_DAC_IRQHandler(void) {
         }
     }
 
-    propguard_update(estimated_current, imu.dps, sp.sp, current_ms);
-
-    float base_kp[3] = {35, 37, 32};
-    float base_ki[3] = {63, 53, 57};
-    for (int a = 0; a < 3; a++) {
-        float scale = rls_autotune_update(a, imu.dps[a], pid.out[a]);
-        if (scale < 0.5f) scale = 0.5f;
-        if (scale > 2.0f) scale = 2.0f;
-        pid.kp[a] = base_kp[a] * scale;
-        pid.ki[a] = base_ki[a] * scale;
-    }
-
-    float ff_pred[3] = {0, 0, 0};
-    if (armed) {
-        pred_ff_update(sp.sp, ff_pred, 1.0f/3200.0f);
-    }
-
     if (armed && !is_crashed) {
         float dt = 1.0f / 3200.0f;
-        pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, imu.dps, dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
-        float ff_pred[3];
-        pred_ff_update(sp.sp, ff_pred, dt);
+        pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, imu.dps,
+                   dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
         for (int axis = 0; axis < 3; axis++) {
-            pid.out[axis] += ff_pred[axis];
-            pid.out[axis] *= propguard_get_scale(axis);
             if (pid.out[axis] >  1000.0f) pid.out[axis] =  1000.0f;
             if (pid.out[axis] < -1000.0f) pid.out[axis] = -1000.0f;
         }
@@ -114,29 +83,13 @@ void TIM6_DAC_IRQHandler(void) {
         pid.out[0] = pid.out[1] = pid.out[2] = 0;
     }
 
-    failsafe(&rx, &fs_active);
-
-    /* Launch control */
-    bool launch_active = (rx.aux & 0x02) != 0;
-    launch_control(sp.sp, rx.thr, launch_active);
-
-    /* Anti-gravity */
-    float ag_scale = anti_gravity_scale(rx.thr);
-    for (int a = 0; a < 3; a++) {
-        pid.ki[a] *= ag_scale;
-    }
-
     asymmetric_mixer(pid.out, (uint16_t)rx.thr, motors, blade_loss.efficiency);
 
-    /* Turtle mode when disarmed */
-    if (!armed && (rx.aux & 0x04)) {
-        turtle_mode_mix(motors, true);
-    }
-
-    if (armed && !fs_active && imu.healthy) {
+    if (armed && !fs_active && bmi_config_loaded && imu.healthy &&
+        dshot_output_available()) {
         dshot_send(motors);
     } else {
-        uint16_t off[4] = {1000, 1000, 1000, 1000};
+        uint16_t off[4] = {0, 0, 0, 0};
         dshot_send(off);
     }
 
@@ -155,38 +108,20 @@ void TIM7_IRQHandler(void) {
     ADC1->CTRL2 |= (1 << 22);
     while (ADC1->STS & (1 << 1));
     uint16_t vraw = ADC1->RDAT;
-    bat.v = ((float)vraw / 4095.0f) * 3.28f * 8.5f;
+    bat.v = ((float)vraw / 4095.0f) * 3.28f * VBAT_FACT;
 
-    float duty = (float)(rx.thr - 1000) / 1000.0f;
+    float duty = ((float)rx.thr - 1000.0f) / 1000.0f;
     if (duty < 0) duty = 0;
-    float i_est = duty * 20.0f;
-    estimated_current = 0.95f * estimated_current + 0.05f * i_est;
-
-    rpm_update(&rpm.model, &rpm.meas, &rpm.fused, &rpm.conf, rpm.hz, bat.v, duty);
-
-    if (current_ms - last_rpm_update_ms >= 100U) {
-        last_rpm_update_ms = current_ms;
-        filter_bank_update_rpm(rpm.hz[0], rpm.conf, current_ms);
-    }
-
-    float currents[4] = {
-        estimated_current, estimated_current,
-        estimated_current, estimated_current
-    };
-    blade_loss_detect(currents, imu.dps);
-
-    float notch_hz = cur_notch_update(duty, bat.v, 14);
-    (void)notch_hz;
 
     if (current_ms - last_health_check_ms >= 1000U) {
         last_health_check_ms = current_ms;
         if (!bmi270_is_healthy_fixed()) {
-            bmi270_reset_health();
-            if (!imu.healthy) {
-                armed = false;
-        uint16_t off[4] = {0, 0, 0, 0};
-                dshot_send(off);
-            }
+            armed = false;
+            fs_active = true;
+            pid.i[0] = pid.i[1] = pid.i[2] = 0;
+            pid.out[0] = pid.out[1] = pid.out[2] = 0;
+            uint16_t off[4] = {0, 0, 0, 0};
+            dshot_send(off);
         }
     }
 
@@ -211,7 +146,6 @@ void TIM7_IRQHandler(void) {
 
 int main(void) {
     hal_init();
-    boot_time_ms = hal_ms();
 
     spi_init(SPI1);
     spi_init(SPI2);
@@ -224,25 +158,19 @@ int main(void) {
     ADC1->RSQ2  = (11 << 0) | (12 << 5) | (13 << 10);
     ADC1->CTRL2 = (1 << 8) | (1 << 1) | (1 << 22);
 
-    if (bmi270_config_upload() != 0) {
+    bmi_config_loaded = bmi270_config_upload() == 0;
+    if (bmi_config_loaded) {
+        bmi270_real_init();
+        bmi_config_loaded = bmi270_calibrate_fixed();
     }
-    bmi270_real_init();
-    bmi270_calibrate_fixed();
     dshot_init_all();
     crsf_init();
     flash_log_init();
 
     pid_init(pid.kp, pid.ki, pid.kd, pid.kf, pid.out, pid.i, pid.gp, pid.dl);
     filter_bank_init(FRAME_HZ, 3200.0f, 200.0f);
-    propguard_init(9000.0f, 300.0f, 100);
-    rpm_init(&rpm.model, &rpm.meas, &rpm.fused, &rpm.conf, rpm.hz);
-    iterm_init(iterm.i, 400.0f);
-
-    pred_ff_init(pid.kf);
     crash_rec_init();
     blade_loss_init();
-    cur_notch_init();
-    rls_autotune_init();
 
     IWDG->KR = 0x5555;
     IWDG->PR = 4;
@@ -273,11 +201,6 @@ int main(void) {
 
     while (1) {
         flash_log_process();
-
-        if (!armed && bmi270_recal_pending()) {
-            bmi270_do_recal();
-        }
-
         IWDG->KR = 0xAAAA;
         asm volatile("wfi");
     }

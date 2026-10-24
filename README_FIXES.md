@@ -1,138 +1,49 @@
-# RADUN Прошивка - Исправления
+# RADUN firmware status
 
-## 🎯 ЧТО БЫЛО ИСПРАВЛЕНО
+## Target confirmed from the connected flight controller
 
-### 1. **BMI270 с температурной компенсацией**
-- **Проблема**: Дрейф ~2°/с за 40 секунд
-- **Решение**: Коэффициенты из blackbox-логов:
-  - Roll: 0.065 °/s per °C, offset 12.4 °/s at 25°C
-  - Pitch: 0.067 °/s per °C, offset -8.7 °/s at 25°C
-  - Yaw: 0.063 °/s per °C, offset 5.2 °/s at 25°C
-- **Результат**: Дрейф <0.2 °/с
+- Board: ACCIF435
+- MCU: AT32F435G
+- Installed firmware observed over MSP: Betaflight 4.5.2
+- Motor protocol configured in Betaflight: DSHOT600
+- Betaflight gyro alignment: CW90 plus `gyro_1_align_yaw = 900`
+- Receiver was reporting RXLOSS when the status was captured.
+- Battery was not connected when the status was captured.
 
-### 2. **Фильтры с управлением состоянием**
-- **Проблема**: Static переменные → всплески при обновлении коэффициентов
-- **Решение**: Каждый фильтр имеет свою историю, сохранение состояния при обновлении
-- **Slew limiting**: 8 Hz/sec при изменении RPM частот
+## Safety and implementation status
 
-### 3. **PropGuard (РАБОЧИЙ)**
-- **Проблема**: Пустая функция-заглушка
-- **Решение**: Пороги из твоих логов:
-  - dI/dt threshold: 9000
-  - Gyro/SP mismatch: 300 °/s
-  - Cooldown: 100ms
-- **Результат**: Защита от удара пропеллером
+The custom image is currently a **bench-development build, not flight firmware**.
+The DShot output backend in `dshot_real.c` is deliberately disabled and holds all
+four known motor pins low. Arming is blocked while the backend reports unavailable.
+Do not replace the working Betaflight installation with this image for flight.
 
-### 4. **Crash Recovery с реалистичными порогами**
-- **Проблема**: Ложные срабатывания при 1200 °/s
-- **Решение**: Порог 2000 °/с + low throttle
-- **Результат**: Только реальные краши
+The next steps required before motor output can be enabled are:
 
-### 5. **DShot GCR таблица**
-- **Проблема**: Неправильное значение 0x00 вместо 0x1C
-- **Решение**: Исправленная таблица (официальная из Betaflight)
-- **Результат**: Корректная работа моторов
+1. Implement the AT32F435 timer/DMA backend against the MCU reference manual and
+   verify the four outputs with a logic analyzer and propellers removed.
+2. Validate the DSHOT600 frame timing, motor order, and direction on the actual ESC.
+3. Test sensor axes and attitude response on the bench against Betaflight's
+   confirmed sensor alignment.
+4. Add a supported receiver/MSP path and run receiver-loss/recovery tests.
+5. Validate battery voltage scaling against a meter and the actual battery.
+6. Complete hardware-in-the-loop and restrained, propeller-free motor tests before
+   considering flight.
 
-## 📁 ЗАМЕНЕННЫЕ ФАЙЛЫ
+## Changes currently in the source
 
-```
-1. bmi270_fixed.c          → вместо bmi270_real.c
-   - Температурная компенсация
-   - Health monitoring
-   - Авторекалибровка
+- The CRSF parser validates frame length and CRC, and invalidates stale RC data.
+- A neutral-stick interlock is required after startup or receiver loss before arming.
+- BMI270 configuration upload is no longer followed by a second soft reset.
+- Gyro calibration rejects excessive offset or motion during the calibration window.
+- Unverified temperature offsets, in-flight RLS gain changes, duplicate predictive
+  feed-forward, and model-based current/blade-loss detection are not used by the
+  control loop.
+- The BMI270 axes use the alignment reported by the connected Betaflight target.
+- Host tests cover failsafe/interlock behavior, anti-gravity utility boundaries,
+  FFT peak detection, and the disabled motor-output gate.
 
-2. rd_filter_pred_fixed.c  → вместо rd_filter_pred.c
-   - Управление состоянием фильтров
-   - Slew limiting
-   - Рабочий PropGuard
+## Build
 
-3. main_fixed.c           → вместо main.c
-   - Исправленные обработчики
-   - Health checking
-   - Реалистичные пороги crash recovery
-
-4. Makefile              → обновлен для новых файлов
-5. radun.h              → добавлены прототипы
-```
-
-## 🚀 СБОРКА И ПРОШИВКА
-
-### Вариант A: Через build_test.bat
-```
-1. Откройте командную строку в папке проекта
-2. Запустите: build_test.bat
-3. Если сборка успешна, прошейте radun_accif435.hex
-```
-
-### Вариант B: Вручную
-```
-1. make clean
-2. make
-3. make size   (проверить размер)
-4. Прошить radun_accif435.hex на ACCIF435
-```
-
-## 🔧 ТЕСТИРОВАНИЕ
-
-### Без пропеллеров (рекомендуется сначала):
-```
-1. Подключите ACCIF435 через ST-Link
-2. Прошейте исправленную прошивку
-3. Проверьте:
-   - LED мигает 3 раза при старте
-   - При подаче газа (без пропеллеров) моторы не включаются
-   - При arming комбинации LED реагирует
-```
-
-### С пропеллерами (осторожно!):
-```
-1. Уберите пропеллеры или будьте готовы к резкой остановке
-2. Прошейте прошивку
-3. Проверьте температурную компенсацию:
-   - Дайте поработать 2-3 минуты
-   - Гироскоп не должен дрейфовать более 0.2 °/с
-4. Проверьте PropGuard:
-   - Легко коснитесь пропеллера пальцем
-   - Должен сработать scale reduction на соответствующей оси
-```
-
-## 📊 ОЖИДАЕМЫЕ УЛУЧШЕНИЯ
-
-1. **Точность гироскопа**: +8x (2 °/с → 0.2 °/с)
-2. **Стабильность фильтров**: без всплесков при изменении RPM
-3. **Безопасность**: рабочий PropGuard при ударах пропеллером
-4. **Надежность**: health monitoring детектирует сбойный гироскоп
-5. **Управляемость**: меньше ложных crash recovery
-
-## 🆘 ЕСЛИ ЧТО-ТО НЕ РАБОТАЕТ
-
-### Проблема: Не компилируется
-```
-1. Проверьте build.log
-2. Убедитесь что установлен arm-none-eabi-gcc
-3. Проверьте наличие всех файлов в Makefile
-```
-
-### Проблема: Не прошивается
-```
-1. Проверьте подключение ST-Link
-2. Попробуйте прошить через OpenOCD:
-   openocd -f interface/stlink-v2.cfg -f target/stm32f4x.cfg
-   -c "program radun_accif435.hex verify reset exit"
-```
-
-### Проблема: Не работает BMI270
-```
-1. Проверьте SPI соединения (PA4-PA7)
-2. Убедитесь что bmi270_config_file.c содержит правильный blob
-3. Проверьте логи через blackbox
-```
-
-## 📞 ОБРАТНАЯ СВЯЗЬ
-
-Если нашли баги или есть вопросы:
-1. Сделайте blackbox-лог проблемы
-2. Сохраните build.log если не компилируется
-3. Опишите симптомы подробно
-
-**Удачи с тестированием! 🚀**
+The ARM GNU toolchain is required. Build with the repository Makefile, then verify
+the generated image before any use. A successful compile or HEX checksum does not
+mean the firmware is suitable for flight.

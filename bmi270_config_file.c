@@ -519,6 +519,7 @@ const uint16_t bmi270_config_file_len = 8192;
 
 /* BMI270 register addresses for config upload */
 #define BMI2_INIT_CTRL_ADDR    0x59U
+#define BMI2_INTERNAL_STATUS_ADDR 0x21U
 #define BMI2_INIT_ADDR_0       0x5BU
 #define BMI2_INIT_DATA_ADDR    0x5EU
 #define BMI2_CMD               0x7EU
@@ -528,13 +529,13 @@ static uint8_t bmi270_read_reg(uint8_t reg) {
     uint8_t val;
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
     spi_rw(SPI1, reg | 0x80);
+    (void)spi_rw(SPI1, 0xFF);
     val = (uint8_t)spi_rw(SPI1, 0xFF);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
     return val;
 }
 
 /* BMI270 config upload using Bosch init_addr/init_data SPI protocol.
- * Writes the full configuration blob, then soft-resets to apply.
  * Returns 0 on success, -1 on error.
  * Must be called before bmi270_real_init() enables the sensor.
  */
@@ -542,19 +543,23 @@ int bmi270_config_upload(void) {
     uint16_t i;
     uint8_t reg;
 
+    gpio_af(GYRO_CS_PORT, GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7, 5);
+    gpio_out(GYRO_CS_PORT, GYRO_CS_PIN);
+    gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
+    spi_init(SPI1);
+
     /* 1. Soft reset before config load */
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI2_CMD | 0x80);
+    spi_rw(SPI1, BMI2_CMD);
     spi_rw(SPI1, BMI2_SOFT_RESET_CMD);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
     delay_ms(2);
 
     /* 2. Disable config load (INIT_CTRL_ADDR bit 0 = 0) */
-    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR | 0x80);
-    reg = spi_rw(SPI1, 0xFF);
+    reg = bmi270_read_reg(BMI2_INIT_CTRL_ADDR);
     reg &= ~0x01U;
-    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR | 0x80);
+    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
+    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR);
     spi_rw(SPI1, reg);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
 
@@ -565,15 +570,17 @@ int bmi270_config_upload(void) {
         uint16_t word_addr = i / 2U;
         uint8_t addr_buf[2];
 
-        addr_buf[0] = (uint8_t)(word_addr & 0xFFU);
-        addr_buf[1] = (uint8_t)((word_addr >> 8) & 0xFFU);
+        addr_buf[0] = (uint8_t)(word_addr & 0x0FU);
+        addr_buf[1] = (uint8_t)(word_addr >> 4);
 
         gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-        spi_rw(SPI1, BMI2_INIT_ADDR_0 | 0x80);
+        spi_rw(SPI1, BMI2_INIT_ADDR_0);
         spi_rw(SPI1, addr_buf[0]);
         spi_rw(SPI1, addr_buf[1]);
+        gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
 
-        spi_rw(SPI1, BMI2_INIT_DATA_ADDR | 0x80);
+        gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
+        spi_rw(SPI1, BMI2_INIT_DATA_ADDR);
         for (uint16_t j = 0; j < chunk_len; j++) {
             spi_rw(SPI1, bmi270_config_file[i + j]);
         }
@@ -582,28 +589,18 @@ int bmi270_config_upload(void) {
     }
 
     /* 4. Enable config load */
-    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR | 0x80);
-    reg = spi_rw(SPI1, 0xFF);
+    reg = bmi270_read_reg(BMI2_INIT_CTRL_ADDR);
     reg |= 0x01U;
-    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR | 0x80);
+    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
+    spi_rw(SPI1, BMI2_INIT_CTRL_ADDR);
     spi_rw(SPI1, reg);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
-    delay_ms(10);
 
-    /* 5. Verify config load enabled */
-    reg = bmi270_read_reg(BMI2_INIT_CTRL_ADDR);
-    if ((reg & 0x01U) == 0U) {
+    /* Bosch's SensorAPI waits 20 ms before checking the initialization status. */
+    delay_ms(20);
+    if (bmi270_read_reg(BMI2_INTERNAL_STATUS_ADDR) != 0x01U) {
         return -1;
     }
 
-    /* 6. Soft reset to apply the loaded configuration */
-    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI2_CMD | 0x80);
-    spi_rw(SPI1, BMI2_SOFT_RESET_CMD);
-    gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
-    delay_ms(2);
-
     return 0;
 }
-

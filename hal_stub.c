@@ -1,11 +1,10 @@
 /* hal_stub.c — заглушки HAL для host-сборки */
 #include "radun.h"
-#include <stdlib.h>
-#include <time.h>
 
-uint32_t hal_ms(void) { return (uint32_t)(clock() * 1000 / CLOCKS_PER_SEC); }
-void delay_ms(uint32_t ms) { (void)ms; }
-void delay_us(uint32_t us) { (void)us; }
+static uint32_t fake_ms;
+uint32_t hal_ms(void) { return fake_ms; }
+void delay_ms(uint32_t ms) { fake_ms += ms; }
+void delay_us(uint32_t us) { fake_ms += us / 1000U; }
 void hal_init(void) {}
 void gpio_out(GPIO_t *g, uint16_t p) { (void)g; (void)p; }
 void gpio_af(GPIO_t *g, uint16_t p, uint8_t a) { (void)g; (void)p; (void)a; }

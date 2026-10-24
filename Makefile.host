@@ -2,7 +2,7 @@
 CC_HOST = gcc
 CFLAGS_HOST = -Wall -Wextra -g -O0 -DHOST_BUILD -fsanitize=address
 
-SRCS_HOST = tests/test_pid.c pid.c modes.c rd_filter_pred_fixed.c hal_stub.c
+SRCS_HOST = tests/test_pid.c pid.c modes.c rd_filter_pred_fixed.c dshot_real.c hal_stub.c
 
 test: $(SRCS_HOST)
 	$(CC_HOST) $(CFLAGS_HOST) -o run_tests $^ -lm

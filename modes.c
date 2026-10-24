@@ -1,6 +1,7 @@
 /* modes.c — режимы, attitude, RPM, iterm (всё в одном файле, чтобы не было дубликатов) */
 #include "radun.h"
 #include <math.h>
+#include <string.h>
 
 /* ============================================================================
    ATTITUDE (Mahony AHRS) — точный фильтр с кватернионами
@@ -10,9 +11,10 @@
 static float fast_inv_sqrt(float x) {
     float halfx = 0.5f * x;
     float y = x;
-    long i = *(long*)&y;
-    i = 0x5f3759df - (i >> 1);
-    y = *(float*)&i;
+    uint32_t i;
+    memcpy(&i, &y, sizeof(i));
+    i = 0x5f3759dfU - (i >> 1);
+    memcpy(&y, &i, sizeof(y));
     y = y * (1.5f - (halfx * y * y));
     return y;
 }
@@ -169,8 +171,9 @@ void launch_control(float sp[3], uint16_t thr, bool active) {
     if (thr < 1200) { sp[0] *= 0.3f; sp[1] *= 0.3f; }
 }
 float anti_gravity_scale(uint16_t thr) {
-    float t = (float)(thr - 1000) / 1000.0f;
-    if (t < 0) t = 0; if (t > 1) t = 1;
+    float t = ((float)thr - 1000.0f) / 1000.0f;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
     return 1.0f + t * 2.0f;
 }
 float vbat_sag_compensate(float vbat, float current) {
@@ -179,22 +182,36 @@ float vbat_sag_compensate(float vbat, float current) {
     if (v < 3.0f) v = 3.0f;
     return vbat / v;
 }
-static uint32_t fs_t0 = 0;
-
 void failsafe(crsf_t *rx, bool *active) {
-    if (rx->lq > 50) {
+    if (rx->valid && rx->lq > 50) {
         *active = false;
-        fs_t0 = 0;
         return;
     }
-    if (fs_t0 == 0) fs_t0 = hal_ms();
-    if (hal_ms() - fs_t0 > 500) {
-        *active = true;
-        rx->thr = 1000;
-        rx->r = 0;
-        rx->p = 0;
-        rx->y = 0;
+
+    *active = true;
+    rx->thr = 1000;
+    rx->r = 0;
+    rx->p = 0;
+    rx->y = 0;
+    rx->aux = 0;
+}
+
+bool arming_interlock_update(const crsf_t *rx, bool failsafe_active) {
+    static bool require_neutral = true;
+
+    if (failsafe_active || !rx->valid) {
+        require_neutral = true;
+        return false;
     }
+
+    if (require_neutral) {
+        bool sticks_neutral = rx->r >= -200 && rx->r <= 200 &&
+                              rx->p >= -200 && rx->p <= 200 &&
+                              rx->y >= -200 && rx->y <= 200;
+        if (rx->thr >= 1050 || !sticks_neutral) return false;
+        require_neutral = false;
+    }
+    return true;
 }
 
 /* ============================================================================

@@ -39,6 +39,7 @@ typedef struct { volatile uint32_t CTRL1, CTRL2, SMCTRL, DINTEN, INTF, SWEV,
     BDCTRL, DMACFG, DMATB; }
 TIM_t;
 #define TIM1 ((TIM_t*)(APB2PERIPH + 0x0000))
+#define TIM8 ((TIM_t*)(APB2PERIPH + 0x13400))
 #define TIM3 ((TIM_t*)(APB1PERIPH + 0x0400))
 #define TIM6 ((TIM_t*)(APB1PERIPH + 0x1000))
 #define TIM7 ((TIM_t*)(APB1PERIPH + 0x1400))
@@ -85,6 +86,10 @@ IWDG_t;
 
 #define VBAT_DIVIDER    10
 #define VBAT_SCALE      102
+/* Калибровка делителя батареи под ACCIF435 (Vbat = (vraw/4095)*VREF*VBAT_FACT) */
+#ifndef VBAT_FACT
+#define VBAT_FACT       8.45f
+#endif
 #define FRAME_HZ        112.0f
 
 typedef struct { int16_t r, p, y, thr; uint16_t aux; uint8_t lq; bool valid; }
@@ -164,6 +169,7 @@ int bmi270_config_upload(void);
 bool bmi270_is_healthy(void);
 void dshot_init_all(void);
 void dshot_send(uint16_t motors[4]);
+bool dshot_output_available(void);
 void dshot_telem_feed(int motor, uint32_t pulse_us);
 float dshot_get_rpm(int motor);
 void crsf_init(void);
@@ -173,6 +179,7 @@ void pid_update(float kp[3], float ki[3], float kd[3], float kf[3], float sp[3],
 void modes_apply(crsf_t* rx, float att[2], float sp[3]);
 void mixer(float out[3], uint16_t thr, uint16_t m[4]);
 void failsafe(crsf_t* rx, bool* active);
+bool arming_interlock_update(const crsf_t *rx, bool failsafe_active);
 float vbat_sag_compensate(float vbat, float current);
 float anti_gravity_scale(uint16_t thr);
 void turtle_mode_mix(uint16_t m[4], bool active);
@@ -197,6 +204,7 @@ void bmp280_read(baro_t *baro);
 void flash_log_init(void);
 void flash_log(uint32_t loop_cnt, const imu_t *imu, const pid_t *pid, const uint16_t motors[4], const bat_t *bat);
 void flash_log_start(void);
+void flash_log_stop(void);
 void msp_process(uint8_t cmd, uint8_t *payload, uint8_t len);
 
 /* Advanced safety */
@@ -227,17 +235,11 @@ CoreDebug_t;
 typedef struct { volatile uint32_t CTRL, LOAD, VAL, CALIB; }
 SysTick_t;
 #define SysTick ((SysTick_t*)0xE000E010UL)
-/* ============================================================================
-   Исправленные функции (температурная компенсация, фильтры, PropGuard)
-   ============================================================================ */
+/* Sensor diagnostics and dynamic filters */
 
-/* BMI270 с температурной компенсацией */
 void bmi270_process_fixed(imu_t *imu, uint32_t time_ms);
 bool bmi270_is_healthy_fixed(void);
-void bmi270_calibrate_fixed(void);
-void bmi270_reset_health(void);
-bool bmi270_recal_pending(void);
-void bmi270_do_recal(void);
+bool bmi270_calibrate_fixed(void);
 void bmi270_get_diagnostics(float *temp_c, float *mean_dps, float *variance_dps, 
                            uint32_t *error_count, bool *is_calibrated);
 
@@ -247,6 +249,7 @@ void filter_bank_update_rpm(float rpm_hz, float rpm_confidence, uint32_t time_ms
 void filter_bank_apply(float dps[3]);
 void filter_bank_reset(void);
 void fft_update_gyro(float gyro_val);
+void fft_process(void);
 int fft_get_peaks(float *out, int maxn);
 
 /* Рабочий PropGuard */
@@ -256,5 +259,3 @@ float propguard_get_scale(int axis);
 void propguard_reset(void);
 void propguard_get_diagnostics(int8_t *triggered_axis, float *scale, 
                               uint32_t *event_count, float *current_dilp);
-
-

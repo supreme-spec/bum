@@ -21,21 +21,19 @@ void bmi270_real_init(void) {
     gpio_out(GYRO_CS_PORT, GYRO_CS_PIN); gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
     spi_init(SPI1);
 
+    /* Configure the sensors only after bmi270_config_upload() succeeds. */
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI_CMD | 0x80); spi_rw(SPI1, 0xB6);
-    gpio_set(GYRO_CS_PORT, GYRO_CS_PIN); delay_ms(2);
-
-    gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
-    spi_rw(SPI1, BMI_GYR_CONF | 0x80); spi_rw(SPI1, 0x2D);
-    spi_rw(SPI1, BMI_GYR_RANGE | 0x80); spi_rw(SPI1, 0x00);
-    spi_rw(SPI1, BMI_INT1_IO | 0x80);   spi_rw(SPI1, 0x0A);
-    spi_rw(SPI1, BMI_INT_MAP | 0x80);   spi_rw(SPI1, 0x04);
-    spi_rw(SPI1, BMI_PWR_CTRL | 0x80);  spi_rw(SPI1, 0x06);
+    spi_rw(SPI1, BMI_GYR_CONF); spi_rw(SPI1, 0x2D);
+    spi_rw(SPI1, BMI_GYR_RANGE); spi_rw(SPI1, 0x00);
+    spi_rw(SPI1, BMI_INT1_IO);   spi_rw(SPI1, 0x0A);
+    spi_rw(SPI1, BMI_INT_MAP);   spi_rw(SPI1, 0x04);
+    spi_rw(SPI1, BMI_PWR_CTRL);  spi_rw(SPI1, 0x06);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN); delay_ms(50);
 
     uint8_t id = 0;
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
     spi_rw(SPI1, 0x00 | 0x80);
+    (void)spi_rw(SPI1, 0xFF);
     id = spi_rw(SPI1, 0xFF);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
     healthy = (id == 0x24);
@@ -44,6 +42,7 @@ void bmi270_real_init(void) {
 void bmi270_process(imu_t *imu) {
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
     spi_rw(SPI1, BMI_GYR_X_L | 0x80);
+    (void)spi_rw(SPI1, 0xFF);
     int16_t g[3], a[3];
     for (int i = 0; i < 6; i++) {
         uint8_t l = spi_rw(SPI1, 0xFF), h = spi_rw(SPI1, 0xFF);
@@ -65,6 +64,7 @@ void bmi270_process(imu_t *imu) {
 
     gpio_clr(GYRO_CS_PORT, GYRO_CS_PIN);
     spi_rw(SPI1, BMI_TEMP_L | 0x80);
+    (void)spi_rw(SPI1, 0xFF);
     uint8_t tl = spi_rw(SPI1, 0xFF), th = spi_rw(SPI1, 0xFF);
     gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
     imu->temp = 23.0f + (float)(int16_t)((uint16_t)tl | ((uint16_t)th << 8)) / 512.0f;
