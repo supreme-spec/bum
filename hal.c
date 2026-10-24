@@ -18,7 +18,7 @@ void SystemInit(void) {
 
 void SysTick_Handler(void) { ms_cnt++; }
 uint32_t hal_ms(void) { return ms_cnt; }
-void delay_ms(uint32_t m) { uint32_t t = ms_cnt + m; while (ms_cnt < t); }
+void delay_ms(uint32_t m) { uint32_t start = hal_ms(); while (hal_ms() - start < m); }
 void delay_us(uint32_t u) { uint32_t t = DWT->CYCCNT + u * 288; while (DWT->CYCCNT < t); }
 
 void hal_init(void) {
@@ -59,6 +59,7 @@ void i2c_write(uint8_t addr, uint8_t reg, uint8_t val) {
     while (!(I2C1->STS1 & (1<<0)));
     I2C1->DR = addr << 1;
     while (!(I2C1->STS1 & (1<<1)));
+    (void)I2C1->STS2;
     I2C1->DR = reg;
     while (!(I2C1->STS1 & (1<<2)));
     I2C1->DR = val;
@@ -72,6 +73,7 @@ uint8_t i2c_read(uint8_t addr, uint8_t reg) {
     while (!(I2C1->STS1 & (1<<0)));
     I2C1->DR = addr << 1;
     while (!(I2C1->STS1 & (1<<1)));
+    (void)I2C1->STS2;
     I2C1->DR = reg;
     while (!(I2C1->STS1 & (1<<2)));
     I2C1->CTRL1 |= (1 << 8);
@@ -86,7 +88,7 @@ uint8_t i2c_read(uint8_t addr, uint8_t reg) {
 }
 
 void uart_init(UART_t* u, uint32_t baud) {
-    u->BAUD = APB2_HZ / baud;
+    u->BAUD = APB2_HZ / (16 * baud);
     u->CTRL1 = (1<<3)|(1<<2)|(1<<13);
 }
 

@@ -31,14 +31,14 @@ void crsf_poll(crsf_t* out) {
         if (crsf_pos < 64) crsf_buf[crsf_pos++] = b;
         if (crsf_pos >= 26 && crsf_buf[2] == 0x16) {
             uint8_t expected_len = crsf_buf[1];
-            if (crsf_pos >= expected_len + 4) {
+            if (crsf_pos >= expected_len + 2) {
                 uint8_t crc = crsf_crc8(&crsf_buf[2], expected_len - 1);
                 if (crc == crsf_buf[2 + expected_len - 1]) {
                     uint32_t raw = 0;
                     for (int i = 0; i < 6; i++) raw |= ((uint32_t)crsf_buf[3 + i]) << (i*8);
                     crsf_data.r = (int16_t)((raw & 0x7FF) - 992);
                     crsf_data.p = (int16_t)(((raw >> 11) & 0x7FF) - 992);
-                    crsf_data.thr = (int16_t)(((raw >> 22) & 0x7FF));
+                    crsf_data.thr = (int16_t)(((raw >> 22) & 0x7FF) * 5 / 8 + 875);
                     crsf_data.y = (int16_t)(((raw >> 33) & 0x7FF) - 992);
                     crsf_data.aux = (raw >> 44) & 0xFFFF;
                     crsf_data.lq = 0xFF;

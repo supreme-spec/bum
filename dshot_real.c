@@ -41,7 +41,13 @@ void dshot_init_all(void) {
 void dshot_send(uint16_t motors[4]) {
     uint16_t ro[4] = {motors[1], motors[0], motors[2], motors[3]};
     for (int i = 0; i < 4; i++) {
-        uint16_t f = dshot_encode(ro[i], false);
+        uint16_t pwm = ro[i];
+        uint16_t dshot_val = 0;
+        if (pwm > 1000) {
+            dshot_val = (pwm - 1000) * 2 + 48;
+            if (dshot_val > 2047) dshot_val = 2047;
+        }
+        uint16_t f = dshot_encode(dshot_val, false);
         switch (i) {
             case 0: TIM1->CH2C = f; break;
             case 1: TIM1->CH1C = f; break;
