@@ -1,9 +1,12 @@
 /* flash_log.c — запись в SPI flash через RAM буфер (не в ISR!) */
 #include "radun.h"
+#include "board_accif435.h"
 #include <string.h>
 
 #define FLASH_LOG_PAGE_SIZE 256
-#define LOG_RING_SIZE 32
+#define FLASH_SECTOR_SIZE   4096UL
+#define FLASH_LOG_CAPACITY  (64UL * 1024UL)   /* 64 КБ лога (сверять с платой) */
+#define LOG_RING_SIZE       32
 
 typedef struct __attribute__((packed)) {
     uint32_t iteration;
@@ -20,6 +23,7 @@ static uint32_t log_write_address = 0;
 static bool logging_enabled = false;
 static uint8_t page_buffer[FLASH_LOG_PAGE_SIZE];
 static uint16_t page_buf_offset = 0;
+static uint32_t log_dropped = 0;
 
 static blackbox_frame_t log_ring[LOG_RING_SIZE];
 static volatile uint16_t ring_write_idx = 0;
@@ -29,8 +33,10 @@ static void flash_cs_low(void)  { gpio_clr(FLASH_CS_PORT, FLASH_CS_PIN); }
 static void flash_cs_high(void) { gpio_set(FLASH_CS_PORT, FLASH_CS_PIN); }
 static uint8_t flash_spi_rw(uint8_t byte) { return spi_rw(FLASH_SPI, byte); }
 
+uint32_t flash_get_dropped(void) { return log_dropped; }
+
 void flash_log_init(void) {
-    RCC->APB1 |= (1 << 14);
+    CRM_APB1EN |= APB1EN_SPI2;
     gpio_af(GPIOB, GPIO_PIN_13, 5);
     gpio_af(GPIOB, GPIO_PIN_14, 5);
     gpio_af(GPIOB, GPIO_PIN_15, 5);
@@ -42,6 +48,7 @@ void flash_log_init(void) {
     logging_enabled = false;
     page_buf_offset = 0;
     ring_write_idx = ring_read_idx = 0;
+    log_dropped = 0;
 }
 
 static void flash_write_enable(void) {
@@ -81,6 +88,24 @@ static void flash_flush_page(void) {
     flash_wait_not_busy();
     log_write_address += page_buf_offset;
     page_buf_offset = 0;
+
+    /* Переход на следующий сектор при необходимости */
+    if ((log_write_address % FLASH_SECTOR_SIZE) == 0U) {
+        if (log_write_address >= FLASH_LOG_CAPACITY) {
+            logging_enabled = false;
+            return;
+        }
+        flash_erase_sector(log_write_address);
+    }
+}
+
+static void flash_next_sector(void) {
+    log_write_address = (log_write_address + FLASH_SECTOR_SIZE - 1) & ~(FLASH_SECTOR_SIZE - 1);
+    if (log_write_address >= FLASH_LOG_CAPACITY) {
+        logging_enabled = false;
+        return;
+    }
+    flash_erase_sector(log_write_address);
 }
 
 void flash_log(uint32_t loop_cnt, const imu_t *imu, const pid_t *pid,
@@ -88,7 +113,10 @@ void flash_log(uint32_t loop_cnt, const imu_t *imu, const pid_t *pid,
     if (!logging_enabled) return;
 
     uint16_t next_idx = (ring_write_idx + 1) % LOG_RING_SIZE;
-    if (next_idx == ring_read_idx) return;
+    if (next_idx == ring_read_idx) {
+        log_dropped++;
+        return;
+    }
 
     blackbox_frame_t *f = &log_ring[ring_write_idx];
     f->iteration = loop_cnt;
@@ -124,6 +152,7 @@ void flash_log_start(void) {
     log_write_address = 0;
     page_buf_offset = 0;
     ring_write_idx = ring_read_idx = 0;
+    log_dropped = 0;
     logging_enabled = true;
 }
 

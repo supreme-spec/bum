@@ -1,4 +1,5 @@
 #pragma once
+#include <stdint.h>
 #include <stdbool.h>
 
 typedef enum {
@@ -9,6 +10,7 @@ typedef enum {
 
 typedef struct {
     bool rc_lost;
+    bool gps_lost;
     bool gyro_stuck;
     bool vbat_low;
     bool vbat_crit;

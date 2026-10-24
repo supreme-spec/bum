@@ -3,8 +3,10 @@
 .fpu fpv4-sp-d16
 .thumb
 
+.section .isr_vector,"a",%progbits
 .global g_pfnVectors
-.g_pfnVectors:
+.type g_pfnVectors, %object
+g_pfnVectors:
 .word _estack
 .word Reset_Handler
 .word NMI_Handler

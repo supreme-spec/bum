@@ -1,10 +1,15 @@
-/* crsf.c - CRSF receiver parser for the 16-channel RC frame */
+/* crsf.c - CRSF receiver parser for the 16-channel RC frame + Link Statistics */
 #include "radun.h"
+#include "board_accif435.h"
 
 #define CRSF_BUFFER_SIZE 64
 #define CRSF_RC_FRAME_LENGTH 24
 #define CRSF_RC_CHANNELS_TYPE 0x16
+#define CRSF_LINK_STATISTICS_TYPE 0x14
+#define CRSF_LINK_STATISTICS_LENGTH 10
 #define CRSF_FRAME_TIMEOUT_MS 100U
+/* CRSF 11 бит: 172 => 1000 мкс, 1811 => 2000 мкс, 992 => 1500 мкс */
+#define CRSF_TO_US(v)  (1000 + ((int32_t)(v) - 172) * 1000 / 1639)
 
 static uint8_t crsf_buf[CRSF_BUFFER_SIZE];
 static uint8_t crsf_pos;
@@ -51,7 +56,7 @@ static void process_rc_frame(void) {
 
     crsf_data.r = (int16_t)channels[0] - 992;
     crsf_data.p = (int16_t)channels[1] - 992;
-    crsf_data.thr = (int16_t)(channels[2] * 5U / 8U + 875U);
+    crsf_data.thr = (int16_t)CRSF_TO_US(channels[2]);
     crsf_data.y = (int16_t)channels[3] - 992;
 
     uint16_t aux = 0;
@@ -61,7 +66,22 @@ static void process_rc_frame(void) {
         }
     }
     crsf_data.aux = aux;
-    crsf_data.lq = 0xFF;
+    crsf_data.valid = true;
+    last_frame_ms = hal_ms();
+}
+
+static void process_link_statistics_frame(void) {
+    /* Payload: uplink_rssi_ant1, uplink_rssi_ant2, uplink_lq,
+     * uplink_snr, active_antenna, rf_mode, tx_power,
+     * downlink_rssi, downlink_lq, downlink_snr */
+    if (crsf_buf[1] != CRSF_LINK_STATISTICS_LENGTH ||
+        crsf_crc8(&crsf_buf[2], CRSF_LINK_STATISTICS_LENGTH - 1U) !=
+            crsf_buf[CRSF_LINK_STATISTICS_LENGTH + 1U]) {
+        return;
+    }
+    const uint8_t *payload = &crsf_buf[3];
+    /* uplink_lq is byte index 2 (0-based within payload) */
+    crsf_data.lq = payload[2];
     crsf_data.valid = true;
     last_frame_ms = hal_ms();
 }
@@ -72,10 +92,10 @@ void crsf_init(void) {
     crsf_data = (crsf_t){0};
     channels[0] = channels[1] = channels[2] = channels[3] = 992U;
 
-    RCC->APB2 |= (1 << 5);
-    gpio_af(GPIOC, GPIO_PIN_7, 8);
-    gpio_af(GPIOC, GPIO_PIN_6, 8);
-    uart_init(USART6, 420000);
+    CRM_APB2EN |= APB2EN_USART6;
+    gpio_af(CRSF_TX_PORT, CRSF_TX_PIN, CRSF_AF);
+    gpio_af(CRSF_RX_PORT, CRSF_RX_PIN, CRSF_AF);
+    uart_init(USART6, g_pclk2_hz, CRSF_BAUD);
 }
 
 void crsf_poll(crsf_t *out) {
@@ -108,7 +128,11 @@ void crsf_poll(crsf_t *out) {
         }
 
         if (crsf_frame_size != 0U && crsf_pos == crsf_frame_size) {
-            process_rc_frame();
+            if (crsf_buf[2] == CRSF_RC_CHANNELS_TYPE) {
+                process_rc_frame();
+            } else if (crsf_buf[2] == CRSF_LINK_STATISTICS_TYPE) {
+                process_link_statistics_frame();
+            }
             crsf_pos = 0;
             crsf_frame_size = 0;
         }

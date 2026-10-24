@@ -5,7 +5,9 @@ MEMORY {
 ENTRY(Reset_Handler)
 _estack = ORIGIN(RAM) + LENGTH(RAM);
 SECTIONS {
-    .isr_vector : { *(.isr_vector) } > FLASH
+    .isr_vector : {
+        KEEP(*(.isr_vector))
+    } > FLASH
     .text : { *(.text .text*) *(.rodata*) } > FLASH
     .data : { _sdata = .; *(.data) *(.data*) . = ALIGN(4); _edata = .; } > RAM AT> FLASH
     _sidata = LOADADDR(.data);

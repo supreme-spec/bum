@@ -1,10 +1,9 @@
-/* main_fixed.c — полная интеграция всех подсистем */
+/* main_fixed.c — полная интеграция всех подсистем (исправленная, P0+) */
 #include "radun.h"
-#include "radun_advanced.h"
+#include "board_accif435.h"
 #include <math.h>
 #include "watchdog.h"
 #include "failsafe.h"
-#include "dshot_bidir.h"
 #include "rpm_filter.h"
 #include "ubx.h"
 
@@ -31,53 +30,75 @@ static uint32_t loop_cnt = 0, bb_cnt = 0;
 static uint32_t last_health_check_ms = 0;
 static uint32_t last_led_update_ms = 0;
 static bool bmi_config_loaded;
-static uint32_t last_rpm_feed_ms = 0;
+
+/* ---------- Arm FSM ---------- */
+typedef enum { ST_DISARMED, ST_ARM_REQUEST, ST_ARMED, ST_FAULT } arm_state_t;
+static arm_state_t arm_st = ST_DISARMED;
+static float arm_t = 0.0f;
+
+static void arming_task(float dt, const crsf_t *rx, bool prearm_ok, bool fs)
+{
+    bool stick_low   = rx->thr < 1050;
+    bool gesture     = rx->y > 700 && rx->r < -200 && rx->p < -200;
+    bool kill_gesture= rx->y < -700 && stick_low;
+
+    switch (arm_st) {
+    case ST_DISARMED:
+        arm_t = 0.0f;
+        if (stick_low && gesture && prearm_ok && !fs) arm_st = ST_ARM_REQUEST;
+        break;
+    case ST_ARM_REQUEST:      /* жест надо удерживать 300 мс */
+        arm_t += dt;
+        if (!(stick_low && gesture) || fs || !prearm_ok) arm_st = ST_DISARMED;
+        else if (arm_t > 0.3f) { arm_st = ST_ARMED; pid.i[0] = pid.i[1] = pid.i[2] = 0.0f; filter_bank_reset(); }
+        break;
+    case ST_ARMED:
+        if (fs) arm_st = ST_FAULT;
+        else if (kill_gesture) { arm_t += dt; if (arm_t > 0.5f) arm_st = ST_DISARMED; }
+        else arm_t = 0.0f;
+        break;
+    case ST_FAULT:
+        if (!fs && stick_low) arm_st = ST_DISARMED;
+        break;
+    }
+}
 
 void TIM6_DAC_IRQHandler(void) {
     uint32_t current_ms = hal_ms();
-    TIM6->INTF = 0;
+    float dt = 1.0f / 3200.0f;
+    TMR6->INTF = 0;
 
     bmi270_process_fixed(&imu, current_ms);
     filter_bank_apply(imu.dps);
-    imu_update_attitude(imu.dps, imu.acc, imu.att, 1.0f/3200.0f);
+    imu_update_attitude(imu.dps, imu.acc, imu.att, dt);
     crsf_poll(&rx);
 
     failsafe(&rx, &fs_active);
-    bool arming_allowed = arming_interlock_update(&rx, fs_active);
+    bool prearm_ok = prearm_check(&imu, &rx, &bat);
+    arming_task(dt, &rx, prearm_ok, fs_active);
+    armed = (arm_st == ST_ARMED);
+
     if (fs_active && armed) {
         armed = false;
+        arm_st = ST_FAULT;
         pid.i[0] = pid.i[1] = pid.i[2] = 0;
         pid.out[0] = pid.out[1] = pid.out[2] = 0;
         flash_log_stop();
     }
 
-    if (!armed && arming_allowed && !fs_active && bmi_config_loaded &&
-        dshot_output_available() && rx.valid && imu.healthy &&
-        rx.thr < 1050 && rx.y > 700 && rx.r < -200 && rx.p < -200) {
-        armed = true;
-        pid.i[0] = pid.i[1] = pid.i[2] = 0;
-        filter_bank_reset();
-        flash_log_start();
-    }
-    if (armed && rx.valid && rx.thr < 1050 && rx.y < -700) {
-        armed = false;
-        flash_log_stop();
-    }
-
-    bool is_crashed = false;
+    float sp_rate[3] = {0, 0, 0};
     if (armed) {
-        is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
+        bool is_crashed = crash_rec_check(imu.dps, rx.thr, armed);
         if (is_crashed) {
             crash_rec_reset_pid(pid.i);
-            sp.sp[0] = sp.sp[1] = sp.sp[2] = 0;
         } else {
-            modes_apply(&rx, imu.att, sp.sp);
+            modes_apply(&rx, imu.att, sp_rate);
         }
     }
 
-    if (armed && !is_crashed) {
-        float dt = 1.0f / 3200.0f;
-        pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, imu.dps,
+    if (armed) {
+        /* РОВНО ОДИН вызов PID на такт */
+        pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp_rate, imu.dps,
                    dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
         for (int axis = 0; axis < 3; axis++) {
             if (pid.out[axis] >  1000.0f) pid.out[axis] =  1000.0f;
@@ -86,22 +107,6 @@ void TIM6_DAC_IRQHandler(void) {
     } else {
         sp.sp[0] = sp.sp[1] = sp.sp[2] = 0;
         pid.out[0] = pid.out[1] = pid.out[2] = 0;
-    }
-
-    if (rpm_filter_healthy()) {
-        float gyro_filt[3];
-        gyro_filt[0] = rpm_filter_apply(0, imu.dps[0]);
-        gyro_filt[1] = rpm_filter_apply(1, imu.dps[1]);
-        gyro_filt[2] = rpm_filter_apply(2, imu.dps[2]);
-        if (armed && !is_crashed) {
-            float dt = 1.0f / 3200.0f;
-            pid_update(pid.kp, pid.ki, pid.kd, pid.kf, sp.sp, gyro_filt,
-                       dt, (float)rx.thr, pid.out, pid.i, pid.gp, pid.dl);
-            for (int axis = 0; axis < 3; axis++) {
-                if (pid.out[axis] >  1000.0f) pid.out[axis] =  1000.0f;
-                if (pid.out[axis] < -1000.0f) pid.out[axis] = -1000.0f;
-            }
-        }
     }
 
     asymmetric_mixer(pid.out, (uint16_t)rx.thr, motors, blade_loss.efficiency);
@@ -114,7 +119,7 @@ void TIM6_DAC_IRQHandler(void) {
         dshot_send(off);
     }
 
-    if (++bb_cnt >= 4) {
+    if (++bb_cnt >= 8) {
         bb_cnt = 0;
         flash_log(loop_cnt, &imu, &pid, motors, &bat);
     }
@@ -124,17 +129,16 @@ void TIM6_DAC_IRQHandler(void) {
 
 void TIM7_IRQHandler(void) {
     uint32_t current_ms = hal_ms();
-    TIM7->INTF = 0;
+    TMR7->INTF = 0;
 
-    ADC1->CTRL2 |= (1 << 22);
-    while (ADC1->STS & (1 << 1));
-    uint16_t vraw = ADC1->RDAT;
-    bat.v = ((float)vraw / 4095.0f) * 3.28f * VBAT_FACT;
+    /* ADC читается циклически через DMA в adc_dma_update() (главный цикл) */
+    bat.v = ((float)adc_get_vbat_raw() / 4095.0f) * 3.28f * VBAT_FACT;
 
     if (current_ms - last_health_check_ms >= 1000U) {
         last_health_check_ms = current_ms;
         if (!bmi270_is_healthy_fixed()) {
             armed = false;
+            arm_st = ST_DISARMED;
             fs_active = true;
             pid.i[0] = pid.i[1] = pid.i[2] = 0;
             pid.out[0] = pid.out[1] = pid.out[2] = 0;
@@ -143,7 +147,7 @@ void TIM7_IRQHandler(void) {
         }
     }
 
-    IWDG->KR = 0xAAAA;
+    IWDG->KR = IWDG_KEY_RELOAD;
 
     if (current_ms - last_led_update_ms >= 500U) {
         last_led_update_ms = current_ms;
@@ -165,82 +169,78 @@ void TIM7_IRQHandler(void) {
 int main(void) {
     hal_init();
 
+    /* SPI1 для гироскопа (SCK=PB3, MISO=PB4, MOSI=PB5, CS=PA4) */
     spi_init(SPI1);
-    spi_init(SPI2);
-    gpio_af(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, 4);
-    I2C1->CTRL2 = APB1_HZ / 1000000;
-    I2C1->CTRL1 = (1 << 15) | (1 << 0);
+    gpio_af(SPI1_SCK_GPIO, SPI1_SCK_PIN, SPI1_AF);
+    gpio_af(SPI1_MISO_GPIO, SPI1_MISO_PIN, SPI1_AF);
+    gpio_af(SPI1_MOSI_GPIO, SPI1_MOSI_PIN, SPI1_AF);
+    gpio_out(GYRO_CS_PORT, GYRO_CS_PIN);
+    gpio_set(GYRO_CS_PORT, GYRO_CS_PIN);
 
+    /* I2C1 для барометра (SCL=PB6, SDA=PB7) */
+    gpio_af(I2C1_SCL_GPIO, I2C1_SCL_PIN, I2C1_AF);
+    gpio_af(I2C1_SDA_GPIO, I2C1_SDA_PIN, I2C1_AF);
+    I2C1->CTRL2 = (uint32_t)(g_pclk1_hz / 1000000UL);
+    I2C1->CTRL1 = (1UL << 15) | (1UL << 0);
+
+    /* ADC1: канал 11 (VBAT), циклически через DMA */
     ADC1->SMPT1 = 0x0FFFFFFF;
-    ADC1->RSQ1  = (2 << 20);
-    ADC1->RSQ2  = (11 << 0) | (12 << 5) | (13 << 10);
-    ADC1->CTRL2 = (1 << 8) | (1 << 1) | (1 << 22);
+    ADC1->RSQ1  = (1UL << 20) | (ADC_CTRL2_ADCON);   /* 1 канал, SQ1 = канал 11 */
+    ADC1->RSQ2  = 0;
 
     bmi_config_loaded = bmi270_config_upload() == 0;
     if (bmi_config_loaded) {
         bmi270_real_init();
         bmi_config_loaded = bmi270_calibrate_fixed();
     }
-    dshot_init_all();
+    dshot_init();
     crsf_init();
     flash_log_init();
+    adc_dma_init();
 
     pid_init(pid.kp, pid.ki, pid.kd, pid.kf, pid.out, pid.i, pid.gp, pid.dl);
     filter_bank_init(FRAME_HZ, 3200.0f, 200.0f);
     crash_rec_init();
     blade_loss_init();
 
-    IWDG->KR = 0x5555;
+    /* IWDG: перезагрузка ~0.8 с, кормим из TIM7 */
+    IWDG->KR = IWDG_KEY_ENABLE;
+    IWDG->KR = IWDG_KEY_WRITE;
     IWDG->PR = 4;
     IWDG->RLR = 1000;
-    IWDG->KR = 0xAAAA;
-    IWDG->KR = 0xCCCC;
+    IWDG->KR = IWDG_KEY_RELOAD;
 
     watchdog_init(200);
     failsafe_init();
-    dshot_bidir_init();
     rpm_filter_init();
     ubx_init();
 
-    NVIC_SetPriority(54, 0);
-    NVIC_SetPriority(55, 1);
-    NVIC_ISER1 = (1 << 22) | (1 << 23);
+    /* TIM6 — контур управления 3.2 кГц (IRQ 53), TIM7 — ADC/LED 800 Гц (IRQ 54) */
+    NVIC_SetPriority(53, 0);
+    NVIC_SetPriority(54, 1);
+    CORE_NVIC_ISER1 = (1UL << (53 - 32)) | (1UL << (54 - 32));
 
-    TIM6->PSC = (APB1_HZ / 3200) - 1;
-    TIM6->CARR = 0;
-    TIM6->CTRL1 = (1 << 2) | (1 << 0);
-    TIM6->DINTEN = 1;
+    TMR6->PSC  = (tmrclk1_hz() / 3200U) - 1U;
+    TMR6->CARR = 0;
+    TMR6->CTRL1 = (1UL << 2) | (1UL << 0);   /* URS=1, CEN=1 */
+    TMR6->DINTEN = 1;
 
-    TIM7->PSC = (APB1_HZ / 800) - 1;
-    TIM7->CARR = 0;
-    TIM7->CTRL1 = (1 << 2) | (1 << 0);
-    TIM7->DINTEN = 1;
+    TMR7->PSC  = (tmrclk1_hz() / 800U) - 1U;
+    TMR7->CARR = 0;
+    TMR7->CTRL1 = (1UL << 2) | (1UL << 0);
+    TMR7->DINTEN = 1;
 
     for (int i = 0; i < 3; i++) {
-        gpio_set(GPIOC, GPIO_PIN_14);
+        gpio_set(LED_PORT, LED_PIN);
         delay_ms(100);
-        gpio_clr(GPIOC, GPIO_PIN_14);
+        gpio_clr(LED_PORT, LED_PIN);
         delay_ms(100);
     }
 
     while (1) {
+        adc_dma_update();
         flash_log_process();
-        dshot_bidir_process_telemetry();
-        uint32_t now_ms = hal_ms();
-        if (now_ms - last_rpm_feed_ms >= 2) {
-            last_rpm_feed_ms = now_ms;
-            for (int m = 0; m < 4; m++) {
-                const esc_telemetry_t *t = dshot_bidir_get_telemetry(m);
-                if (t && t->valid && t->erpm > 0) {
-                    rpm_filter_feed_erpm(m, t->erpm);
-                }
-            }
-            dshot_bidir_request_telemetry_all();
-        }
-        rpm_filter_update_coeffs();
-        ubx_process();
-        failsafe_update_gps_from_ubx();
         watchdog_feed();
-        __asm__ volatile ("nop");
+        __asm volatile ("wfi");
     }
 }

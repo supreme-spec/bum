@@ -10,7 +10,7 @@
 /* Fast inverse square root approximation (для Cortex-M4 FPU) */
 static float fast_inv_sqrt(float x) {
     if (x <= 0.0f || !isfinite(x)) {
-        return 0.0f;
+        return 1.0f;   /* безопасная единица, иначе кватернион обнуляется -> NaN */
     }
 
     const float half_x = 0.5f * x;
@@ -129,47 +129,58 @@ void mahony_ahrs_reset(void) {
 /* ============================================================================
    MODES — преобразование стиков в setpoint
    ============================================================================ */
+static inline float deadband(float v, float db)
+{
+    if (v > db) return v - db;
+    if (v < -db) return v + db;
+    return 0.0f;
+}
+
+/* angle -> rate: внешний P по углу, внутренний контур скорости */
+static void angle_to_rate(const float att[2], const float sp_deg[2], float sp_rate[2])
+{
+    const float K_ANGLE = 6.0f;          /* (deg/s) на градус ошибки */
+    const float MAX_RATE = 400.0f;
+
+    float e_r = sp_deg[0] - att[0];
+    float e_p = sp_deg[1] - att[1];
+    sp_rate[0] = fmaxf(-MAX_RATE, fminf(MAX_RATE, e_r * K_ANGLE));
+    sp_rate[1] = fmaxf(-MAX_RATE, fminf(MAX_RATE, e_p * K_ANGLE));
+}
+
 void modes_apply(crsf_t* rx, float att[2], float sp[3]) {
     /* AUX1: Angle mode, AUX2: Horizon mode, AUX3: Air mode */
     bool angle_mode = (rx->aux & 1);
     bool horizon_mode = (rx->aux & 2);
     bool air_mode = (rx->aux & 4);
 
-    /* Convert stick inputs to setpoints */
-    float stick_r = rx->r * 500.0f / 500.0f;  /* Roll rate */
-    float stick_p = rx->p * 500.0f / 500.0f;  /* Pitch rate */
-    float stick_y = rx->y * 500.0f / 500.0f;  /* Yaw rate */
+    /* стики -> нормированные [-1..1], дедбенд 3 % */
+    float n[3];
+    n[0] = deadband(rx->r / 819.0f, 0.03f);
+    n[1] = deadband(rx->p / 819.0f, 0.03f);
+    n[2] = deadband(rx->y / 819.0f, 0.03f);
 
-    /* Angle mode: stick position = target angle */
     if (angle_mode) {
-        sp[0] = stick_r * 45.0f;  /* Max 45 degrees */
-        sp[1] = stick_p * 45.0f;
-        sp[2] = stick_y;
-    }
-    /* Horizon mode: blend between angle and rate based on stick deflection */
-    else if (horizon_mode) {
-        float stick_mag = sqrtf(stick_r*stick_r + stick_p*stick_p);
-        float blend = stick_mag / 500.0f;  /* 0 at center, 1 at full deflection */
-        if (blend > 1.0f) blend = 1.0f;
-
-        float angle_sp_r = stick_r * 45.0f;
-        float angle_sp_p = stick_p * 45.0f;
-
-        sp[0] = (1.0f - blend) * angle_sp_r + blend * stick_r;
-        sp[1] = (1.0f - blend) * angle_sp_p + blend * stick_p;
-        sp[2] = stick_y;
-    }
-    /* Air mode: pure rate control with zero throttle I-term relaxation */
-    else if (air_mode) {
-        sp[0] = stick_r;
-        sp[1] = stick_p;
-        sp[2] = stick_y;
-    }
-    /* Acro mode (default): pure rate control */
-    else {
-        sp[0] = stick_r;
-        sp[1] = stick_p;
-        sp[2] = stick_y;
+        float sp_deg[2] = { n[0] * 55.0f, n[1] * 55.0f };
+        angle_to_rate(att, sp_deg, sp);
+        sp[2] = n[2] * 300.0f;
+    } else if (horizon_mode) {
+        float blend = fminf(1.0f, sqrtf(n[0]*n[0] + n[1]*n[1]));
+        float ang[2], rate[2];
+        float sp_deg[2] = { n[0] * 55.0f, n[1] * 55.0f };
+        angle_to_rate(att, sp_deg, ang);
+        rate[0] = n[0] * 800.0f; rate[1] = n[1] * 800.0f;
+        sp[0] = (1.0f - blend) * ang[0] + blend * rate[0];
+        sp[1] = (1.0f - blend) * ang[1] + blend * rate[1];
+        sp[2] = n[2] * 300.0f;
+    } else if (air_mode) {
+        sp[0] = n[0] * 800.0f;
+        sp[1] = n[1] * 800.0f;
+        sp[2] = n[2] * 300.0f;
+    } else {                                                 /* Acro */
+        sp[0] = n[0] * 800.0f;
+        sp[1] = n[1] * 800.0f;
+        sp[2] = n[2] * 300.0f;
     }
 }
 

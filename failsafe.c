@@ -47,3 +47,10 @@ bool failsafe_allow_arm(void) {
     if (fs_flags.vbat_crit) return false;
     return true;
 }
+
+void failsafeUpdateGps(double lat, double lon, float alt, uint8_t sats, float speedMs)
+{
+    (void)lat; (void)lon; (void)alt; (void)speedMs;
+    /* GPS-фейлсейв: отдельное состояние, НЕ взводить rc_lost по GPS */
+    fs_flags.gps_lost = (sats < 5);
+}

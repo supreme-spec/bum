@@ -1,0 +1,40 @@
+name: Build RADUN (AT32F435G)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GNU Toolchain
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '12.2.rel1'
+
+      - name: Clean build artifacts
+        run: make clean
+
+      - name: Build firmware
+        run: make
+
+      - name: Verify .isr_vector section present
+        run: |
+          arm-none-eabi-objdump -h radun_accif435.elf | grep -q '\.isr_vector'
+
+      - name: Verify g_pfnVectors symbol present
+        run: |
+          arm-none-eabi-nm -n radun_accif435.elf | grep -q 'g_pfnVectors'
+
+      - name: Upload ELF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: radun-elf
+          path: radun_accif435.elf
+          retention-days: 7

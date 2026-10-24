@@ -1,13 +1,17 @@
 #include "radun.h"
 
+#define PID_ERR_NORM    (1.0f / 500.0f)      /* 500 °/s -> 1.0 */
+#define PID_D_LPF_HZ    100.0f
+#define PID_I_LIMIT     0.5f
+
 static float sp_filtered[3] = {0, 0, 0};
-static float d_weight[3] = {1.0f, 1.0f, 1.0f};  /* D-term setpoint weight */
+static float d_weight[3] = {1.0f, 1.0f, 1.0f};
 
 void pid_init(float kp[3], float ki[3], float kd[3], float kf[3],
               float out[3], float i[3], float gp[3], float dl[3]) {
-    kp[0]=35; ki[0]=63; kd[0]=35; kf[0]=30;
-    kp[1]=37; ki[1]=53; kd[1]=35; kf[1]=30;
-    kp[2]=32; ki[2]=57; kd[2]=0;  kf[2]=30;
+    kp[0]=45; ki[0]=0.35f; kd[0]=0.0012f; kf[0]=0.0f;
+    kp[1]=45; ki[1]=0.35f; kd[1]=0.0012f; kf[1]=0.0f;
+    kp[2]=35; ki[2]=0.20f; kd[2]=0.0f;    kf[2]=0.0f;
     out[0]=out[1]=out[2]=0;
     i[0]=i[1]=i[2]=0;
     gp[0]=gp[1]=gp[2]=0;
@@ -27,41 +31,41 @@ void pid_set_d_weight(float weight[3]) {
 void pid_update(float kp[3], float ki[3], float kd[3], float kf[3],
                 float sp[3], float dps[3], float dt, float thr,
                 float out[3], float i[3], float gp[3], float dl[3]) {
-    /* TPA on all terms, not just D */
+    /* TPA: режем усиление выше 50 % газа, линейно до 20 % на 100 % */
     float tpa = 1.0f;
-    if (thr > 1500) tpa = 1.0f - 0.5f * ((thr - 1500) / 500.0f);
+    if (thr > 1500.0f) tpa = 1.0f - 0.8f * (thr - 1500.0f) / 500.0f;
+    if (tpa < 0.2f) tpa = 0.2f;
+
+    float a_d = dt / (dt + 1.0f / (6.2831853f * PID_D_LPF_HZ));
 
     for (int a = 0; a < 3; a++) {
-        float err = sp[a] - dps[a];
+        /* err и sp в °/s, нормализованные к 1.0 при 500 °/s */
+        float err = (sp[a] - dps[a]) * PID_ERR_NORM;
 
-        /* P term */
-        float p_term = kp[a] * err * 0.01f * tpa;
+        /* P */
+        float p = kp[a] * err;
 
-        /* I term with relaxation and anti-windup */
-        float i_relax = 1.0f / (1.0f + (sp[a]*sp[a]) / 810000.0f);
-        i[a] += ki[a] * err * 0.01f * i_relax * dt;
+        /* I с anti-windup (back-calculation при насыщении) */
+        i[a] += ki[a] * err * dt;
+        if (i[a] >  PID_I_LIMIT) i[a] =  PID_I_LIMIT;
+        if (i[a] < -PID_I_LIMIT) i[a] = -PID_I_LIMIT;
 
-        /* Anti-windup: reduce I term when saturated */
-        if (out[a] > 900.0f && err > 0) i[a] *= 0.98f;
-        if (out[a] < -900.0f && err < 0) i[a] *= 0.98f;
+        /* D по измерению (без derivative kick), PT1 с срезом в Гц */
+        float d_meas = -(dps[a] - gp[a]) * PID_ERR_NORM / dt;
+        dl[a] += a_d * (d_meas - dl[a]);
 
-        if (i[a] > 400.0f) i[a] = 400.0f;
-        if (i[a] < -400.0f) i[a] = -400.0f;
+        /* feed-forward */
+        float ff = kf[a] * (sp[a] - sp_filtered[a]) * PID_ERR_NORM / dt * dt;
 
-        /* D term with setpoint filtering (reduce derivative kick) */
-        sp_filtered[a] += 0.1f * (sp[a] - sp_filtered[a]);  /* Low-pass filter setpoint */
-        float d_raw = -(dps[a] - sp_filtered[a] * d_weight[a]) / dt;  /* Apply weight to setpoint */
-        dl[a] += 0.15f * (d_raw - dl[a]);
-        float d_term = kd[a] * dl[a] * 0.0001f * tpa;
+        float sum = p + i[a] + kd[a] * dl[a] + ff;
+        sum *= tpa;
 
-        /* Feed-forward */
-        float ff = kf[a] * sp[a] * 0.01f * tpa;
+        /* anti-windup back-calculation */
+        if (sum > 1.0f)  { i[a] -= (sum - 1.0f) * 0.5f; sum = 1.0f; }
+        if (sum < -1.0f) { i[a] -= (sum + 1.0f) * 0.5f; sum = -1.0f; }
 
-        out[a] = p_term + i[a] + d_term + ff;
+        out[a] = sum;
         gp[a] = dps[a];
-
-        if (out[a] > 1000.0f) out[a] = 1000.0f;
-        if (out[a] < -1000.0f) out[a] = -1000.0f;
+        sp_filtered[a] += 0.1f * (sp[a] - sp_filtered[a]);
     }
 }
-
