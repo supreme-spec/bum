@@ -170,6 +170,11 @@ void filter_bank_apply(float dps[3]) {
         
         // Применяем все три фильтра
         for (int f = 0; f < 3; f++) {
+            if (filter_bank.notch[axis][f].b[0] == 1.0f &&
+                filter_bank.notch[axis][f].b[1] == 0.0f &&
+                filter_bank.notch[axis][f].b[3] == 0.0f) {
+                continue;
+            }
             value = biquad_apply(&filter_bank.notch[axis][f], value);
         }
         

@@ -14,45 +14,72 @@
 
 typedef struct { volatile uint32_t CTRL, PLL, CTRL2, APB1, APB2, AHB1, AHB2, AHB3,
     _r0, APB1RP, APB2RP, _r1[2], BDCTRL, CTRLSTS, AHB1RP, AHB2RP, AHB3RP,
-    _r2[2], APB1RP2, APB2RP2; } RCC_t;
+    _r2[2], APB1RP2, APB2RP2; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); RCC_t;
 #define RCC ((RCC_t*)(AHB1PERIPH + 0x3800))
 
 typedef struct { volatile uint32_t MODE, OTYPE, OSPEED, PUPD, IN, OUT, BSET, BCLR,
-    LOCK, AFSEL[2]; } GPIO_t;
+    LOCK, AFSEL[2]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); GPIO_t;
 #define GPIOA ((GPIO_t*)(AHB1PERIPH + 0x0000))
 #define GPIOB ((GPIO_t*)(AHB1PERIPH + 0x0400))
 #define GPIOC ((GPIO_t*)(AHB1PERIPH + 0x0800))
 
-typedef struct { volatile uint32_t CTRL1, CTRL2, STS, DT, _r[4]; } SPI_t;
+typedef struct { volatile uint32_t CTRL1, CTRL2, STS, DT, _r[4]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); SPI_t;
 #define SPI1 ((SPI_t*)(APB2PERIPH + 0x3000))
 #define SPI2 ((SPI_t*)(APB1PERIPH + 0x3800))
 
-typedef struct { volatile uint32_t STS, DT, BAUD, CTRL1, CTRL2, CTRL3, GTPR; } UART_t;
+typedef struct { volatile uint32_t STS, DT, BAUD, CTRL1, CTRL2, CTRL3, GTPR; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); UART_t;
 #define USART6 ((UART_t*)(APB2PERIPH + 0x1400))
 
 typedef struct { volatile uint32_t CTRL1, CTRL2, SMCTRL, DINTEN, INTF, SWEV,
     CHCTRL1, CHCTRL2, CHCCTRL, CNT, PSC, CARR, RPT, CH1C, CH2C, CH3C, CH4C,
-    BDCTRL, DMACFG, DMATB; } TIM_t;
+    BDCTRL, DMACFG, DMATB; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); TIM_t;
 #define TIM1 ((TIM_t*)(APB2PERIPH + 0x0000))
 #define TIM3 ((TIM_t*)(APB1PERIPH + 0x0400))
 #define TIM6 ((TIM_t*)(APB1PERIPH + 0x1000))
 #define TIM7 ((TIM_t*)(APB1PERIPH + 0x1400))
 
 typedef struct { volatile uint32_t STS, CTRL1, CTRL2, SMPT1, SMPT2, _r[6],
-    RSQ1, RSQ2, RSQ3, _r2[4], RDAT; } ADC_t;
+    RSQ1, RSQ2, RSQ3, _r2[4], RDAT; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); ADC_t;
 #define ADC1 ((ADC_t*)(APB2PERIPH + 0x2000))
 
 #define NVIC_ISER0 (*(volatile uint32_t*)0xE000E100UL)
 #define NVIC_ISER1 (*(volatile uint32_t*)0xE000E104UL)
 #define NVIC_IPR(n) (*(volatile uint8_t*)(0xE000E400UL + (n)))
 
-typedef struct { volatile uint32_t INTEN, EVTEN, RTEN, FTEN, SWIEV, INTF; } EXTI_t;
+typedef struct { volatile uint32_t INTEN, EVTEN, RTEN, FTEN, SWIEV, INTF; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); EXTI_t;
 #define EXTI ((EXTI_t*)(APB2PERIPH + 0x3C00))
 
-typedef struct { volatile uint32_t CTRL1, CTRL2, OAR1, _r, DR, STS1, STS2; } I2C_t;
+typedef struct { volatile uint32_t CTRL1, CTRL2, OAR1, _r, DR, STS1, STS2; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); I2C_t;
 #define I2C1 ((I2C_t*)(APB1PERIPH + 0x5400))
 
-typedef struct { volatile uint32_t KR, PR, RLR, SR; } IWDG_t;
+typedef struct { volatile uint32_t KR, PR, RLR, SR; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); IWDG_t;
 #define IWDG ((IWDG_t*)0x40003000UL)
 #define FLASH_ACR (*(volatile uint32_t*)0x40023C00UL)
 
@@ -78,7 +105,10 @@ typedef struct { volatile uint32_t KR, PR, RLR, SR; } IWDG_t;
 #define VBAT_SCALE      102
 #define FRAME_HZ        112.0f
 
-typedef struct { int16_t r, p, y, thr; uint16_t aux; uint8_t lq; bool valid; } crsf_t;
+typedef struct { int16_t r, p, y, thr; uint16_t aux; uint8_t lq; bool valid; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); crsf_t;
 
 typedef struct {
     float dps[3];
@@ -86,33 +116,72 @@ typedef struct {
     float att[2];
     float temp;
     bool healthy;
-} imu_t;
+}
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); imu_t;
 
 typedef struct {
     float v;
     float i;
-} bat_t;
+}
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); bat_t;
 
 typedef struct {
     float alt;
-} baro_t;
+}
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); baro_t;
 
 typedef struct {
     float kp[3], ki[3], kd[3], kf[3];
     float out[3], i[3], gp[3], dl[3];
-} pid_t;
+}
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); pid_t;
 
-typedef struct { float sp[3]; } sp_t;
-typedef struct { float model, meas, fused, conf, hz[3]; } rpm_t;
-typedef struct { float i[3]; } iterm_t;
-typedef struct { float ip, didt, dilp, thr, mismatch, scale; uint32_t until, cool; int8_t axis; uint16_t ev; } pg_t;
-typedef struct { float n[3][3][5]; } filt_t;
+typedef struct { float sp[3]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); sp_t;
+typedef struct { float model, meas, fused, conf, hz[3]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); rpm_t;
+typedef struct { float i[3]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); iterm_t;
+typedef struct { float ip, didt, dilp, thr, mismatch, scale; uint32_t until, cool; int8_t axis; uint16_t ev; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); pg_t;
+typedef struct { float n[3][3][5]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); filt_t;
 
 /* Advanced safety types */
-typedef struct { float last_setpoint[3]; float jerk[3]; float kf_pred[3]; } pred_ff_t;
-typedef struct { bool detected; uint32_t timer_ms; uint32_t start_ms; } crash_rec_t;
-typedef struct { float efficiency[4]; bool active; int8_t damaged_idx; uint32_t timer_ms; } blade_loss_t;
-typedef struct { float estimated_hz; float filtered_current; } current_notch_t;
+typedef struct { float last_setpoint[3]; float jerk[3]; float kf_pred[3]; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); pred_ff_t;
+typedef struct { bool detected; uint32_t timer_ms; uint32_t start_ms; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); crash_rec_t;
+typedef struct { float efficiency[4]; bool active; int8_t damaged_idx; uint32_t timer_ms; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); blade_loss_t;
+typedef struct { float estimated_hz; float filtered_current; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); current_notch_t;
 
 extern pred_ff_t pred_ff;
 extern crash_rec_t crash_rec;
@@ -187,12 +256,21 @@ float rls_autotune_update(int axis, float current_omega, float pid_output);
 void rls_autotune_init(void);
 
 /* Register blocks for Cortex-M core */
-typedef struct { volatile uint32_t CTRL, CYCCNT; } DWT_t;
+typedef struct { volatile uint32_t CTRL, CYCCNT; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); DWT_t;
 #define DWT ((DWT_t*)0xE0001000UL)
 #define SCB ((volatile uint32_t*)0xE000ED00UL)
-typedef struct { volatile uint32_t DEMCR; } CoreDebug_t;
+typedef struct { volatile uint32_t DEMCR; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); CoreDebug_t;
 #define CoreDebug ((CoreDebug_t*)0xE000EDF0UL)
-typedef struct { volatile uint32_t CTRL, LOAD, VAL, CALIB; } SysTick_t;
+typedef struct { volatile uint32_t CTRL, LOAD, VAL, CALIB; }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]); SysTick_t;
 #define SysTick ((SysTick_t*)0xE000E010UL)
 /* ============================================================================
    Исправленные функции (температурная компенсация, фильтры, PropGuard)
@@ -227,10 +305,19 @@ void propguard_get_diagnostics(int8_t *triggered_axis, float *scale,
 static inline void filt_init_compat(float n[3][3][5], float fs, float frame) {
     filter_bank_init(frame, fs, 8.0f);
 }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]);
 static inline void filt_apply_compat(float n[3][3][5], float dps[3]) {
     filter_bank_apply(dps);
 }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]);
 static inline void filt_notch_update_compat(float n[3][3][5], int axis, int stage, 
                                            float fc, float q, float fs) {
     // Используем новую систему
 }
+/* Прототипы для новых/интегрированных функций */
+void flash_log_process(void);
+void pred_ff_init(float kf[3]);
